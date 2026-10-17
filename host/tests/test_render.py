@@ -2,7 +2,7 @@ import unittest
 
 from clipboard_agent.frames import REGION_CHIP, REGION_MENU
 from clipboard_agent.pngutil import sample_png
-from clipboard_agent.render import CARD_WIDTH, render_image_card, render_label, render_text_card
+from clipboard_agent.render import CARD_WIDTH, MENU_STRIP, render_image_card, render_label, render_text_card
 
 
 class RenderTest(unittest.TestCase):
@@ -57,6 +57,21 @@ class RenderTest(unittest.TestCase):
         # Background is dark; the glyphs must be clearly lighter.
         self.assertLess(min(reds), 8)
         self.assertGreater(max(reds), 24)
+
+    def test_menu_hotspot_is_full_height_right_strip(self):
+        cards = [
+            render_text_card("短"),
+            render_text_card("张三 13558801181 四川省成都市武侯区某某街道一段很长很长的地址 https://example.com/a/very/long/path"),
+            render_image_card(sample_png(), 48, 48),
+        ]
+        for card in cards:
+            menus = [r for r in card.regions if r.kind == REGION_MENU]
+            self.assertEqual(len(menus), 1)
+            m = menus[0]
+            self.assertEqual((m.x, m.y, m.w, m.h), (CARD_WIDTH - MENU_STRIP, 0, MENU_STRIP, card.height))
+            for r in card.regions:
+                if r is not m:  # nothing else may cover the strip
+                    self.assertLessEqual(r.x + r.w, m.x)
 
 
 if __name__ == "__main__":

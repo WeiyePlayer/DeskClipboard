@@ -161,13 +161,21 @@ def paste_content(
     keystroke: bool,
     prompt: bool,
     restore_after: float | None = None,
+    own_write=None,
 ) -> PasteResult:
+    """``own_write`` is a context-manager factory (Watcher.own_write) that
+    marks the writes below as the agent's own so they are not recorded."""
+    import contextlib
+
+    guard = own_write or contextlib.nullcontext
     previous = snapshot() if restore_after is not None else None
     if png is not None:
-        set_image_png(png)
+        with guard():
+            set_image_png(png)
         message = "已粘贴图片"
     elif text is not None:
-        set_text(text)
+        with guard():
+            set_text(text)
         message = "已粘贴"
     else:
         return PasteResult("unknown-paste", "没有可粘贴的内容")
@@ -182,7 +190,11 @@ def paste_content(
     if previous is not None and restore_after is not None:
         import threading
 
-        threading.Timer(restore_after, lambda: restore(previous)).start()
+        def _restore() -> None:
+            with guard():
+                restore(previous)
+
+        threading.Timer(restore_after, _restore).start()
     return PasteResult("ok", message)
 
 

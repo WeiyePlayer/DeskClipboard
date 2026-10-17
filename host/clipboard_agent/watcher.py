@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import hashlib
+import threading
+from contextlib import contextmanager
 from dataclasses import dataclass
 
 from clipboard_agent.store import Clip, Store
@@ -33,12 +35,39 @@ class Watcher:
         self.paused = False
         self._last = source.change_count()
         self.suppress: str | None = None
+        self._own_counts: set[int] = set()
+        self._writing = 0
+        self._guard = threading.Lock()
+
+    @contextmanager
+    def own_write(self):
+        """Wrap every pasteboard write the agent itself makes.
+
+        A paste from the board writes the chosen clip and, 0.5 s later on a
+        timer thread, writes the user's previous clipboard back. Both bump
+        changeCount; without this the watcher recorded them as new copies and
+        moved items to the top, so the list reordered after every paste.
+        """
+        with self._guard:
+            self._writing += 1
+        try:
+            yield
+        finally:
+            with self._guard:
+                self._own_counts.add(self.source.change_count())
+                self._writing -= 1
 
     def poll(self) -> Clip | None:
-        count = self.source.change_count()
-        if count == self._last:
-            return None
-        self._last = count
+        with self._guard:
+            if self._writing:
+                return None  # look again once our own write has finished
+            count = self.source.change_count()
+            if count == self._last:
+                return None
+            self._last = count
+            if count in self._own_counts:
+                self._own_counts.discard(count)
+                return None
         if self.paused:
             return None
         capture = self.source.read()

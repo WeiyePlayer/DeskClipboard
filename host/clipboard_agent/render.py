@@ -8,6 +8,10 @@ from clipboard_agent.extract import extract_chips
 from clipboard_agent.frames import REGION_BODY, REGION_CHIP, REGION_MENU, Region
 
 CARD_WIDTH = 224
+# The ⋮ hotspot is the whole right strip of a card, not just a 32x36 corner:
+# the resistive-feeling FT6336 lands taps several pixels off, and a corner
+# target that small missed on every card but the first.
+MENU_STRIP = 44
 _PAD = 10
 _TEXT_SIZE = 15
 _CHIP_SIZE = 13
@@ -37,13 +41,13 @@ def render_text_card(text: str, chips: list[str] | None = None) -> Raster:
     canvas.text(text, _PAD, _PAD, CARD_WIDTH - 36, text_height, _TEXT_SIZE, (20, 20, 20))
     canvas.dots(CARD_WIDTH - 18, 18)
     regions = [
-        Region(REGION_BODY, 0, 0, 0, CARD_WIDTH - 32, height),
-        Region(REGION_MENU, 0, CARD_WIDTH - 32, 0, 32, 36),
+        Region(REGION_BODY, 0, 0, 0, CARD_WIDTH - MENU_STRIP, height),
+        Region(REGION_MENU, 0, CARD_WIDTH - MENU_STRIP, 0, MENU_STRIP, height),
     ]
     y = _PAD + text_height + 6
     for index, chip in enumerate(pieces):
         label = chip if len(chip) <= 28 else chip[:26] + "…"
-        chip_w = min(CARD_WIDTH - 2 * _PAD, 12 + _text_width(label, _CHIP_SIZE))
+        chip_w = min(CARD_WIDTH - MENU_STRIP - _PAD, 12 + _text_width(label, _CHIP_SIZE))
         canvas.round_rect(_PAD, y, chip_w, 24, 8, (233, 233, 238))
         canvas.text(label, _PAD + 8, y + 3, chip_w - 16, 18, _CHIP_SIZE, (60, 60, 60))
         regions.append(Region(REGION_CHIP, index, _PAD, y, chip_w, 24))
@@ -67,8 +71,8 @@ def render_image_card(png: bytes, pixel_width: int, pixel_height: int) -> Raster
     )
     canvas.dots(CARD_WIDTH - 18, 18)
     regions = (
-        Region(REGION_BODY, 0, 0, 0, CARD_WIDTH - 32, height),
-        Region(REGION_MENU, 0, CARD_WIDTH - 32, 0, 32, 36),
+        Region(REGION_BODY, 0, 0, 0, CARD_WIDTH - MENU_STRIP, height),
+        Region(REGION_MENU, 0, CARD_WIDTH - MENU_STRIP, 0, MENU_STRIP, height),
     )
     return Raster(CARD_WIDTH, height, canvas.rgb565(), regions)
 

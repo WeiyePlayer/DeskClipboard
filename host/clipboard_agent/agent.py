@@ -253,6 +253,7 @@ class Session:
             keystroke=True,
             prompt=not self._prompted,
             restore_after=0.5,
+            own_write=self.watcher.own_write,
         )
         self._prompted = True
         log(result.message)

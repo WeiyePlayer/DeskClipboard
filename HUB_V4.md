@@ -79,3 +79,17 @@ PYTHONPATH=host .venv/bin/python -m clipboard_agent.agent
 ```
 
 V4 仅导入文字，不改写原 Mac 数据库或图片。恢复 V3 固件后才能运行旧 agent，不要让两个版本同时监听剪贴板。
+
+## 备份与恢复开发板状态（换刷其他固件前）
+
+配对在 NVS（`0x9000`，`0x6000`，命名空间 `deskclip` 的 `peers`/`initialized`），历史在 `hubdata`（`0x410000`，`0xA00000`，FAT + 磨损均衡）。开发板编号和 BLE 公共地址来自 eFuse MAC，重刷不变；没有系统级蓝牙绑定需要恢复。两台电脑的 `client-v4.json` 不受影响。
+
+```sh
+# 按住 BOOT 拔插 USB 进入下载模式后
+scripts/backup-board.sh            # 分区表、bootloader、nvs、phy_init、应用、hubdata → backups/board-<时间>/（含 SHA256SUMS、manifest.json）
+# ……刷其他固件……再次进入下载模式
+scripts/restore-board.sh backups/board-<时间> --app --dry-run   # 先核对
+scripts/restore-board.sh backups/board-<时间> --app             # 校验 SHA-256 与 MAC 后写回并重启
+```
+
+只读写列出的区域，不整片擦除；备份含配对凭据，`backups/` 不入库。

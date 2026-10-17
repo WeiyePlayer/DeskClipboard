@@ -1,3 +1,4 @@
+import os
 import unittest
 
 from clipboard_agent.pasteboard import (
@@ -13,6 +14,8 @@ from clipboard_agent.pasteboard import (
 from clipboard_agent.pngutil import sample_png
 
 
+@unittest.skipUnless(os.environ.get("CLIP_REAL_PASTEBOARD") == "1",
+                     "writes the real macOS pasteboard; set CLIP_REAL_PASTEBOARD=1")
 class PasteboardTest(unittest.TestCase):
     def setUp(self):
         self.original = snapshot()

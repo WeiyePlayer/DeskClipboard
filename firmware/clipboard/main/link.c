@@ -65,33 +65,63 @@ static void s_ack(uint8_t type)
     link_send(type, NULL, 0);
 }
 
+/* Inter-byte limit inside one frame. A frame cut short by the host is
+ * dropped after this long instead of swallowing the start of the next one. */
+#define FRAME_GAP_TICKS pdMS_TO_TICKS(500)
+
+/*
+ * Copy up to `length` bytes out of the ring, waiting at most `wait` ticks for
+ * the first byte. s_data is a binary semaphore that link_rx gives once per USB
+ * chunk, so it is often already "given" for bytes we consumed earlier. Taking
+ * it therefore only means "maybe new data": always re-check s_count and keep
+ * waiting until the deadline instead of treating an empty ring as failure.
+ * (The old code returned false in that case, which aborted any frame that
+ * arrived in more than one burst and left the host waiting for an ACK.)
+ */
+static size_t s_read_some(uint8_t *out, size_t length, TickType_t wait)
+{
+    TickType_t start = xTaskGetTickCount();
+    while (true) {
+        xSemaphoreTake(s_mutex, portMAX_DELAY);
+        size_t n = s_count < length ? s_count : length;
+        if (n > 0) {
+            size_t first = RING_SIZE - s_tail;
+            if (first > n) {
+                first = n;
+            }
+            memcpy(out, s_ring + s_tail, first);
+            if (n > first) {
+                memcpy(out + first, s_ring, n - first);
+            }
+            s_tail = (s_tail + n) % RING_SIZE;
+            s_count -= n;
+            xSemaphoreGive(s_mutex);
+            return n;
+        }
+        xSemaphoreGive(s_mutex);
+        TickType_t elapsed = xTaskGetTickCount() - start;
+        if (elapsed >= wait) {
+            return 0;
+        }
+        xSemaphoreTake(s_data, wait - elapsed);
+    }
+}
+
 static bool s_read_byte(uint8_t *out, TickType_t wait)
 {
-    xSemaphoreTake(s_mutex, portMAX_DELAY);
-    if (s_count == 0) {
-        xSemaphoreGive(s_mutex);
-        if (xSemaphoreTake(s_data, wait) != pdTRUE) {
-            return false;
-        }
-        xSemaphoreTake(s_mutex, portMAX_DELAY);
-    }
-    if (s_count == 0) {
-        xSemaphoreGive(s_mutex);
-        return false;
-    }
-    *out = s_ring[s_tail];
-    s_tail = (s_tail + 1) % RING_SIZE;
-    s_count--;
-    xSemaphoreGive(s_mutex);
-    return true;
+    return s_read_some(out, 1, wait) == 1;
 }
 
 static bool s_read_exact(uint8_t *out, size_t length)
 {
-    for (size_t i = 0; i < length; i++) {
-        if (!s_read_byte(&out[i], portMAX_DELAY)) {
+    size_t offset = 0;
+    while (offset < length) {
+        size_t n = s_read_some(out + offset, length - offset, FRAME_GAP_TICKS);
+        if (n == 0) {
+            ESP_LOGW(TAG, "frame timed out");
             return false;
         }
+        offset += n;
     }
     return true;
 }
@@ -302,6 +332,9 @@ void link_set_dtr(bool asserted)
     bool rising = asserted && !s_dtr;
     s_dtr = asserted;
     if (rising) {
+        /* A new host session: announce ourselves again. */
+        s_host_seen = false;
+        s_next_hello = 0;
         s_hello_pending = true;
         xSemaphoreGive(s_data);
     }

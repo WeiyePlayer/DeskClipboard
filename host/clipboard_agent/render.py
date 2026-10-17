@@ -113,7 +113,15 @@ class _Canvas:
         )
         red, green, blue = (channel / 255 for channel in background)
         self._rep.bitmapData()  # ensure buffer exists
-        context = NSGraphicsContext.graphicsContextWithBitmapImageRep_(self._rep)
+        # The CTM below is flipped so y grows downward like the device screen.
+        # AppKit only draws glyphs and images upright in a flipped CTM when the
+        # context itself is marked flipped; without it every glyph is upside down.
+        import Quartz  # noqa: F401  (bridges CGContextRef for the call below)
+
+        bitmap_context = NSGraphicsContext.graphicsContextWithBitmapImageRep_(self._rep)
+        context = NSGraphicsContext.graphicsContextWithCGContext_flipped_(
+            bitmap_context.CGContext(), True
+        )
         NSGraphicsContext.saveGraphicsState()
         NSGraphicsContext.setCurrentContext_(context)
         from AppKit import NSColor
@@ -199,11 +207,13 @@ class _Canvas:
         picture = NSImage.alloc().initWithData_(NSData.dataWithBytes_length_(png, len(png)))
         if picture is None:
             return
-        picture.drawInRect_fromRect_operation_fraction_(
+        picture.drawInRect_fromRect_operation_fraction_respectFlipped_hints_(
             NSMakeRect(x, y, width, height),
             _zero_rect(),
             1,
             1.0,
+            True,
+            None,
         )
 
     def rgb565(self) -> bytes:

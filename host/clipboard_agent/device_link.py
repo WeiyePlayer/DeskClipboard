@@ -42,6 +42,7 @@ class DeviceLink:
 
     def send(self, frame: bytes, timeout: float = 3) -> None:
         for _ in range(2):
+            self._drop_stale_acks()
             with self._lock:
                 self._serial.write(frame)
             try:
@@ -51,6 +52,15 @@ class DeviceLink:
             if reply.type == ACK:
                 return
         raise TimeoutError("开发板拒绝了这一帧")
+
+    def _drop_stale_acks(self) -> None:
+        # A late ACK/NACK from an earlier timed-out frame must not be taken as
+        # the answer to the frame we are about to send.
+        while True:
+            try:
+                self._acks.get_nowait()
+            except queue.Empty:
+                return
 
     def enter_boot(self) -> None:
         self.send(encode_frame(ENTER_BOOT))
@@ -77,7 +87,10 @@ class DeviceLink:
     def _read_loop(self) -> None:
         while not self._closed:
             try:
-                chunk = self._serial.read(4096)
+                # read(4096) would sit out the whole 0.2 s timeout unless 4 KB
+                # arrived, delaying every 10-byte ACK by 200 ms. Take what is
+                # there, or block for a single byte.
+                chunk = self._serial.read(self._serial.in_waiting or 1)
             except serial.SerialException:
                 return
             if not chunk:

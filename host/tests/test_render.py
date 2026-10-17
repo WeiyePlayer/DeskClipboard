@@ -21,6 +21,29 @@ class RenderTest(unittest.TestCase):
         self.assertGreater(label.width, 10)
         self.assertEqual(len(label.rgb565), label.width * label.height * 2)
 
+    def test_glyphs_and_images_are_upright(self):
+        # Regression: the flipped CTM without a flipped context drew every
+        # glyph and thumbnail upside down on the board.
+        def pixel(raster, x, y):
+            index = (y * raster.width + x) * 2
+            return raster.rgb565[index] | (raster.rgb565[index + 1] << 8)
+
+        def dark(value):
+            return ((value >> 11) & 31) < 12 and ((value >> 5) & 63) < 24
+
+        label = render_label("T", (255, 255, 255), 20)
+        rows = [sum(dark(pixel(label, x, y)) for x in range(label.width)) for y in range(label.height)]
+        inked = [y for y, count in enumerate(rows) if count]
+        widest = max(inked, key=lambda y: rows[y])
+        self.assertLess(widest, (inked[0] + inked[-1]) / 2, "T crossbar should be at the top")
+
+        card = render_image_card(sample_png(), 48, 48)
+        # sample_png has its blue clip near the top (rows 8-14 of 48).
+        blue = pixel(card, 80, 33)
+        mirrored = pixel(card, 80, 83)
+        self.assertLess((blue >> 11) & 31, 8)
+        self.assertGreater((mirrored >> 11) & 31, 24)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+.DS_Store
+backups/
+*.log
+firmware/clipboard/build/
+firmware/clipboard/sdkconfig
+firmware/clipboard/sdkconfig.old
+firmware/clipboard/managed_components/

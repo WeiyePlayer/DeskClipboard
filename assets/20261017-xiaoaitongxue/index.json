@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "chip_model": "esp32s3",
+  "hide_subtitle": false,
+  "display_config": {
+    "width": 240,
+    "height": 320,
+    "monochrome": false,
+    "color": "RGB565"
+  },
+  "srmodels": "srmodels.bin",
+  "skin": {
+    "light": {
+      "text_color": "#000000",
+      "background_color": "#ffffff"
+    },
+    "dark": {
+      "text_color": "#ffffff",
+      "background_color": "#121212"
+    }
+  }
+}

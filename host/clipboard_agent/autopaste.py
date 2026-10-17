@@ -56,6 +56,14 @@ def responsible_app() -> str:
     return "终端（Terminal，或你运行客户端所用的应用）"
 
 
+def startup_hint() -> str:
+    if sys.platform == "win32":
+        return "自动粘贴已就绪"
+    return ("辅助功能未授权，收到内容时只会写入剪贴板、不会自动粘贴。请到「系统设置 → 隐私与安全性 → 辅助功能」"
+            "打开「" + responsible_app() + "」，然后重启客户端"
+            + ("（launchctl kickstart -k gui/$UID/com.weiye.deskclipboard）。" if background_launch() else "。"))
+
+
 def message(outcome: str, platform: str | None = None) -> str:
     table = MESSAGES.get(platform or sys.platform, MESSAGES["darwin"])
     text = table.get(outcome, "已更新本机剪贴板")

@@ -8,6 +8,7 @@ import json
 import os
 from pathlib import Path
 import queue
+import signal
 import sqlite3
 import sys
 import threading
@@ -182,6 +183,8 @@ class HubClient:
             try:
                 if self.transport is None:
                     self.transport = BLETransport(self.config)
+                    self.heartbeat(force=True)
+                    self.log("蓝牙已连接开发板，身份验证通过")
                 self.heartbeat()
                 self.receive()
                 if active is None:
@@ -221,7 +224,9 @@ class HubClient:
             self.log("收到内容后自动粘贴：开启（--no-auto-paste 可关闭）")
             try:
                 if self.paster.prepare():
-                    self.log(autopaste.message(autopaste.ACCESSIBILITY))
+                    self.log(autopaste.startup_hint())
+                else:
+                    self.log("辅助功能已授权，可以自动粘贴")
             except Exception as exc:
                 self.log("无法检查辅助功能权限：" + type(exc).__name__)
         else:
@@ -348,6 +353,13 @@ def main(argv=None):
         print(f"已有 DeskClipboard 客户端在运行（PID {exc.pid}），本次不再启动。"
               "如已安装开机自启，它就在后台运行；日志见 " + str(log_path()), flush=True)
         return 0
+    if hasattr(signal, "SIGTERM"):
+        # launchctl stop / kickstart -k send SIGTERM: leave through the normal
+        # shutdown path (closes BLE, logs) instead of dying silently.
+        def _stop(signum, frame):
+            print(time.strftime("%H:%M:%S"), "收到停止信号，客户端退出", flush=True)
+            raise KeyboardInterrupt
+        signal.signal(signal.SIGTERM, _stop)
     try:
         HubClient(config, paster=autopaste.native_paster(enabled)).run()
     finally:

@@ -65,6 +65,8 @@ def wait_for_port(explicit: str | None, timeout: float) -> str:
         time.sleep(0.2)
 
 
+TOAST_SAFE_VERSION = 3
+
 _RESET_REASONS = {
     1: "上电",
     3: "软件重启",
@@ -109,6 +111,13 @@ class Session:
         self._stale = True
         self._next_sync = 0.0
         self._synced_at = 0.0
+        self.board_version: int | None = None
+        self._old_firmware_logged = False
+
+    def _note_hello(self, frame) -> str:
+        if frame.payload:
+            self.board_version = frame.payload[0]
+        return describe_hello(frame)
 
     def _send(self, frame: bytes) -> bool:
         try:
@@ -162,7 +171,7 @@ class Session:
             return False
         self.port = found[0]
         hello = self.link.wait_hello(1.5)
-        log("重新连上开发板" if hello is None else "重新连上，" + describe_hello(hello))
+        log("重新连上开发板" if hello is None else "重新连上，" + self._note_hello(hello))
         self._stale = True
         self._next_sync = 0.0
         return True
@@ -172,7 +181,7 @@ class Session:
         if hello is None:
             log("没有等到 HELLO，直接同步")
         else:
-            log(describe_hello(hello))
+            log(self._note_hello(hello))
         self.sync()
         lost_logged = False
         while True:
@@ -195,7 +204,7 @@ class Session:
                     # The board repeats HELLO every 0.5 s until our first frame
                     # lands; one that crossed a sync we just finished is stale.
                     if time.time() - self._synced_at > 2.0:
-                        log(describe_hello(event))
+                        log(self._note_hello(event))
                         self.sync()
                 elif event.type == TAP:
                     self._tap(*decode_tap(event.payload))
@@ -248,7 +257,13 @@ class Session:
         self._prompted = True
         log(result.message)
         toast = "已粘贴" if result.code == "ok" else _toast_for(result.code)
-        self._send(toast_frame(toast))
+        # Firmware before protocol 3 double-frees its toast timer on the second
+        # toast and panics, so only send hints to boards that are fixed.
+        if (self.board_version or 0) >= TOAST_SAFE_VERSION:
+            self._send(toast_frame(toast))
+        elif not self._old_firmware_logged:
+            log("开发板固件较旧（协议 < 3），不在屏上显示粘贴提示")
+            self._old_firmware_logged = True
 
     def _menu(self, clip_id: int, action: int) -> None:
         if action == MENU_FAVORITE:

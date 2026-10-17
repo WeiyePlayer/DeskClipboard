@@ -627,11 +627,17 @@ void ui_toast(const uint8_t *pixels, uint16_t width, uint16_t height, uint16_t d
     s_style_image(s_toast, &toast_dsc);
     lv_obj_remove_flag(s_toast, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(s_toast);
-    if (s_toast_timer) {
-        lv_timer_delete(s_toast_timer);
+    /* One persistent one-shot timer. LVGL auto-deletes a timer whose repeat
+     * count runs out, so the old code's lv_timer_delete() on the second toast
+     * freed an already-freed timer and the board panicked (two taps -> crash). */
+    if (s_toast_timer == NULL) {
+        s_toast_timer = lv_timer_create(s_toast_hide, duration_ms, NULL);
+        lv_timer_set_auto_delete(s_toast_timer, false);
     }
-    s_toast_timer = lv_timer_create(s_toast_hide, duration_ms, NULL);
+    lv_timer_set_period(s_toast_timer, duration_ms);
     lv_timer_set_repeat_count(s_toast_timer, 1);
+    lv_timer_reset(s_toast_timer);
+    lv_timer_resume(s_toast_timer);
     lvgl_port_unlock();
 }
 

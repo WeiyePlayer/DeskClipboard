@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from clipboard_agent.agent import Session
 from clipboard_agent.store import Store
@@ -45,6 +46,22 @@ class SessionResilienceTest(unittest.TestCase):
         link.failures = 1
         session.publish(self.store.add_text("二"))
         self.assertTrue(session._stale)
+
+
+    def test_toast_only_for_fixed_firmware(self):
+        from clipboard_agent.frames import REGION_BODY
+        from clipboard_agent.pasteboard import PasteResult
+
+        clip = self.store.add_text("三")
+        refused = PasteResult("accessibility", "refused")
+        for version, expected in ((2, 0), (3, 1)):
+            link = FlakyLink(failures=0)
+            session = Session(self.store, link)
+            session.board_version = version
+            with mock.patch("clipboard_agent.agent.paste_content", return_value=refused):
+                session._tap(clip.id, REGION_BODY, 0)
+                session._tap(clip.id, REGION_BODY, 0)
+            self.assertEqual(link.sent, 2 * expected, f"protocol {version}")
 
 
 if __name__ == "__main__":

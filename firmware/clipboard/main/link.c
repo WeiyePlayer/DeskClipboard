@@ -46,8 +46,15 @@ static void s_write_all(const uint8_t *data, size_t length)
     }
 }
 
+static SemaphoreHandle_t s_tx_mutex;
+
+/* Called from the link task (ACKs) and the LVGL task (taps, menus); the
+ * mutex keeps their frames from interleaving on the wire. */
 void link_send(uint8_t type, const uint8_t *payload, uint32_t length)
 {
+    if (s_tx_mutex) {
+        xSemaphoreTake(s_tx_mutex, portMAX_DELAY);
+    }
     uint8_t header[6] = {CLIP_MAGIC, type};
     memcpy(header + 2, &length, 4);
     uint32_t crc = esp_crc32_le(0, header + 1, 5);
@@ -59,6 +66,9 @@ void link_send(uint8_t type, const uint8_t *payload, uint32_t length)
         s_write_all(payload, length);
     }
     s_write_all((const uint8_t *)&crc, 4);
+    if (s_tx_mutex) {
+        xSemaphoreGive(s_tx_mutex);
+    }
 }
 
 static void s_ack(uint8_t type)
@@ -346,6 +356,7 @@ void link_start(void)
 {
     s_ring = heap_caps_malloc(RING_SIZE, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     s_mutex = xSemaphoreCreateMutex();
+    s_tx_mutex = xSemaphoreCreateMutex();
     s_data = xSemaphoreCreateBinary();
     ui_set_handlers(s_on_tap, s_on_menu, s_on_page);
     xTaskCreate(s_task, "link", 8192, NULL, 5, NULL);

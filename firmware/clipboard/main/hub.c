@@ -12,6 +12,7 @@
 #include "freertos/task.h"
 #include "hub_assets.h"
 #include "hub_store.h"
+#include "screen.h"
 #include "mbedtls/base64.h"
 #include "nvs.h"
 #include "nvs_flash.h"
@@ -38,6 +39,7 @@ static int64_t s_upload_at;
 static int64_t s_pair_until;
 static bool s_dirty;
 static _Atomic uint8_t s_notice;
+static _Atomic bool s_wake; /* screen_wake() outside s_lock (it takes the LVGL lock) */
 static int64_t s_restart_at;
 
 typedef struct
@@ -443,6 +445,8 @@ static void worker(void* arg)
         xSemaphoreGive(s_lock);
         if (notice)
             hub_notice(notice);
+        if (atomic_exchange(&s_wake, false))
+            screen_wake();
         if (restart)
             esp_restart();
     }
@@ -643,6 +647,7 @@ static cJSON* request_locked(const cJSON* r, bool usb, const char* token)
         {
             cJSON_AddNumberToObject(o, "record_id", id);
             s_dirty = true;
+            s_wake = true; /* a computer added an item: worker lights the screen up */
         }
         return o;
     }

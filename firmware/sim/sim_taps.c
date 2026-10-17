@@ -7,6 +7,11 @@
 #include "lvgl.h"
 #include "protocol.h"
 #include "ui.h"
+#include "screen.h"
+
+uint32_t sim_backlight;
+int sim_panel_on = 1;
+int sim_nvs_value = -1;
 
 int sim_replay(const char *path);
 
@@ -45,7 +50,7 @@ static void on_page(uint8_t a) { s_page_action = a; }
 static void run(uint32_t ms) { for (uint32_t t = 0; t < ms; t += 5) { s_now += 5; lv_timer_handler(); } }
 static void tap(int32_t x, int32_t y) { s_x = x; s_y = y; s_down = true; run(80); s_down = false; run(80); }
 
-static lv_obj_t *screen, *list, *item_menu;
+static lv_obj_t *screen, *list, *item_menu, *page_menu; /* page_menu moves to the foreground when opened */
 static int failures;
 
 static bool menu_open(void) { return !lv_obj_has_flag(item_menu, LV_OBJ_FLAG_HIDDEN); }
@@ -70,7 +75,6 @@ static void snapshot(const char *name)
 static void check_header(void)
 {
     lv_obj_t *favorites = lv_obj_get_child(screen, 2);
-    lv_obj_t *page_menu = lv_obj_get_child(screen, 3);
     /* Both padding and text inside each half should switch pages. */
     const int32_t points[][2] = {{180, 24}, {60, 24}, {152, 12}, {88, 36}};
     for (unsigned i = 0; i < sizeof(points) / sizeof(points[0]); i++) {
@@ -151,6 +155,71 @@ static void check_all(const char *phase)
     }
 }
 
+/* Screen-off: dim after the timeout, off DIM later, the waking tap is swallowed,
+ * a new item wakes, and the settings entry cycles and persists the timeout. */
+static void expect(bool ok, const char *what) { if (!ok) { printf("screen: %s  <-- FAIL\n", what); failures++; } }
+static void check_screen(void)
+{
+    screen_backlight_init();
+    screen_set_panel((void *)1);
+    screen_start();
+    ui_set_screen_handlers(screen_timeout_index, screen_cycle_timeout);
+    expect(screen_timeout_index() == SCREEN_TIMEOUT_DEFAULT && sim_backlight == 1023, "default 1 minute, full brightness");
+    run(59000);
+    expect(screen_level() == 0, "still awake at 59 s");
+    run(2000);
+    expect(screen_level() == 1 && sim_backlight > 0 && sim_backlight < 1023 && sim_panel_on, "dimmed after 1 minute");
+    run(5000);
+    expect(screen_level() == 2 && sim_backlight == 0 && !sim_panel_on, "off 5 s after dimming");
+
+    lv_obj_scroll_to_view(lv_obj_get_child(list, 1), LV_ANIM_OFF); run(50);
+    lv_area_t a; lv_obj_get_coords(lv_obj_get_child(list, 1), &a);
+    int taps = s_taps, menus = s_menus;
+    tap(a.x1 + 60, a.y1 + 20);
+    expect(s_taps == taps && s_menus == menus, "waking tap while off is swallowed");
+    expect(screen_level() == 0 && sim_backlight == 1023 && sim_panel_on, "tap wakes the screen");
+    tap(a.x1 + 60, a.y1 + 20);
+    expect(s_taps == taps + 1, "next tap reaches the card");
+
+    run(62000);
+    expect(screen_level() == 1, "dimmed again");
+    tap(a.x1 + 60, a.y1 + 20);
+    expect(s_taps == taps + 1 && screen_level() == 0, "waking tap while dimmed is swallowed");
+
+    run(70000);
+    expect(screen_level() == 2, "off again");
+    s_x = a.x1 + 60; s_y = a.y1 + 20; s_down = true; run(1500); s_down = false; run(100);
+    expect(s_taps == taps + 1 && s_menus == menus && !menu_open(), "long waking press is swallowed until release");
+
+    run(70000);
+    screen_wake(); /* what hub.c does when a computer commits a new item */
+    expect(screen_level() == 0 && sim_panel_on, "new item wakes the screen");
+    run(59000);
+    expect(screen_level() == 0, "new item restarted the timer");
+
+    tap(216, 24);
+    expect(!lv_obj_has_flag(page_menu, LV_OBJ_FLAG_HIDDEN), "settings opens");
+    snapshot("settings-screen");
+    lv_obj_t *entry = lv_obj_get_child(lv_obj_get_child(page_menu, 0), 5);
+    lv_area_t e; lv_obj_get_coords(entry, &e);
+    expect(e.y2 < 320, "screen entry is on screen");
+    uint8_t seen[SCREEN_TIMEOUT_COUNT + 1];
+    for (int i = 0; i <= SCREEN_TIMEOUT_COUNT; i++) {
+        tap((e.x1 + e.x2) / 2, (e.y1 + e.y2) / 2);
+        seen[i] = screen_timeout_index();
+        expect(sim_nvs_value == seen[i], "timeout persisted");
+        expect(!lv_obj_has_flag(page_menu, LV_OBJ_FLAG_HIDDEN), "menu stays open while cycling");
+    }
+    expect(seen[0] == 2 && seen[1] == 3 && seen[2] == 4 && seen[3] == 0 && seen[4] == 1, "cycles 1m->2m->5m->never->30s->1m");
+    tap((e.x1 + e.x2) / 2, (e.y1 + e.y2) / 2); /* 2m -> 5m */
+    tap((e.x1 + e.x2) / 2, (e.y1 + e.y2) / 2); /* 5m -> never */
+    expect(screen_timeout_index() == 4, "never selected");
+    tap(10, 310);
+    run(400000);
+    expect(screen_level() == 0, "never: stays on");
+    printf("screen-off checked\n");
+}
+
 int main(int argc, char **argv)
 {
     const char *frames = argc > 1 ? argv[1] : "build/frames.bin";
@@ -172,6 +241,7 @@ int main(int argc, char **argv)
     screen = lv_screen_active();
     list = lv_obj_get_child(screen, 1);
     item_menu = lv_obj_get_child(screen, 4);
+    page_menu = lv_obj_get_child(screen, 3);
 
     snapshot("header-clipboard");
     check_header();
@@ -196,6 +266,7 @@ int main(int argc, char **argv)
     if (argc > 2) sim_replay(argv[2]);
     run(100);
     check_all("after-menu-action");
+    check_screen();
     printf("failures: %d\n", failures);
     return failures ? 1 : 0;
 }

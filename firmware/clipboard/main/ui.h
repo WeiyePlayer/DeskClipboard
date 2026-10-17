@@ -28,3 +28,6 @@ void ui_show_info(uint8_t title_asset, const char *text);
 void ui_show_peers(const ui_peer_t *peers, size_t count);
 void ui_set_state(bool paused, bool empty, bool setup);
 void ui_reset_cards(void);
+/* Screen-off timeout entry in the settings menu: current index / advance + persist. */
+typedef uint8_t (*ui_screen_fn)(void);
+void ui_set_screen_handlers(ui_screen_fn current, ui_screen_fn cycle);

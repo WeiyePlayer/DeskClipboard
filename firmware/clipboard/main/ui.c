@@ -71,6 +71,7 @@ static ui_revoke_fn s_revoke;
 static ui_peer_t s_peers[UI_MAX_PEERS];
 static uint32_t s_target_id;
 static uint8_t s_target_kind, s_target_chip;
+static ui_screen_fn s_screen_current, s_screen_cycle;
 
 static uint8_t *s_alloc_rgb565(const uint8_t *src, uint16_t width, uint16_t height,
                              uint32_t *stride_out, uint32_t *size_out)
@@ -185,6 +186,8 @@ static void s_page_menu_event(lv_event_t *event)
     s_apply_asset(lv_obj_get_child(box, 2), CLIP_ASSET_DEVICES);
     s_apply_asset(lv_obj_get_child(box, 3), CLIP_ASSET_PAIRING);
     s_apply_asset(lv_obj_get_child(box, 4), CLIP_ASSET_STORAGE);
+    s_apply_asset(lv_obj_get_child(box, 5),
+                  CLIP_ASSET_SCREEN_BASE + (s_screen_current ? s_screen_current() : 1));
     lv_obj_remove_flag(s_page_menu, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(s_page_menu);
 }
@@ -201,6 +204,13 @@ static void s_page_action_event(lv_event_t *event)
         s_apply_asset(lv_obj_get_child(row, 1), CLIP_ASSET_CANCEL);
         lv_obj_remove_flag(s_confirm, LV_OBJ_FLAG_HIDDEN);
         lv_obj_move_foreground(s_confirm);
+        return;
+    }
+    if (action == CLIP_PAGE_SCREEN) {
+        /* Cycle in place so the user can step through the options; the menu stays open. */
+        if (s_screen_cycle) {
+            s_apply_asset(lv_event_get_target(event), CLIP_ASSET_SCREEN_BASE + s_screen_cycle());
+        }
         return;
     }
     if (action == CLIP_PAGE_PAUSE) {
@@ -383,7 +393,7 @@ void ui_init(void)
 
     s_page_menu = s_layer(screen);
     lv_obj_t *page_box = lv_obj_create(s_page_menu);
-    lv_obj_set_size(page_box, 204, 190);
+    lv_obj_set_size(page_box, 204, LV_SIZE_CONTENT);
     lv_obj_align(page_box, LV_ALIGN_TOP_RIGHT, -8, 52);
     lv_obj_set_flex_flow(page_box, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_row(page_box, 8, 0);
@@ -392,6 +402,7 @@ void ui_init(void)
     s_image_button(page_box, s_page_action_event, (void *)(uintptr_t)CLIP_PAGE_DEVICES);
     s_image_button(page_box, s_page_action_event, (void *)(uintptr_t)CLIP_PAGE_PAIRING);
     s_image_button(page_box, s_page_action_event, (void *)(uintptr_t)CLIP_PAGE_STORAGE);
+    s_image_button(page_box, s_page_action_event, (void *)(uintptr_t)CLIP_PAGE_SCREEN);
 
     s_item_menu = s_layer(screen);
     lv_obj_t *item_box = lv_obj_create(s_item_menu);
@@ -697,6 +708,12 @@ void ui_scroll_top(void)
     lvgl_port_lock(0);
     lv_obj_scroll_to_y(s_tab == CLIP_LIST_FAVORITES ? s_fav_list : s_clip_list, 0, LV_ANIM_OFF);
     lvgl_port_unlock();
+}
+
+void ui_set_screen_handlers(ui_screen_fn current, ui_screen_fn cycle)
+{
+    s_screen_current = current;
+    s_screen_cycle = cycle;
 }
 
 void ui_set_hub_handlers(ui_send_fn send, ui_revoke_fn revoke)

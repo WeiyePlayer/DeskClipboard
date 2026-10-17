@@ -12,4 +12,4 @@ if [[ ! -f build/liblvgl.a ]]; then
   ar rcs build/liblvgl.a build/obj/*.o
 fi
 clang -O0 -g -Wall -Wno-deprecated-declarations -DLV_CONF_INCLUDE_SIMPLE -I. -Istubs -I"$L" -I../clipboard/main \
-  ../clipboard/main/ui.c sim_taps.c sim_replay.c build/liblvgl.a -o build/sim
+  ../clipboard/main/ui.c ../clipboard/main/screen.c sim_taps.c sim_replay.c build/liblvgl.a -o build/sim

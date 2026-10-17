@@ -12,6 +12,7 @@
 #include "link.h"
 #include "ui.h"
 #include "hub.h"
+#include "screen.h"
 
 static const char *TAG = "clipboard";
 
@@ -122,7 +123,9 @@ void app_main(void)
     led_rgb(20, 20, 20);
     ESP_ERROR_CHECK(board_display_start());
     ui_init();
-    hub_start();
+    hub_start(); /* initialises NVS */
+    screen_start();
+    ui_set_screen_handlers(screen_timeout_index, screen_cycle_timeout);
     link_start();
     usb_init();
     gpio_config_t boot = {

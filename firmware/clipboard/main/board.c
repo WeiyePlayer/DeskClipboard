@@ -1,4 +1,5 @@
 #include "board.h"
+#include "screen.h"
 
 #include "driver/gpio.h"
 #include "driver/i2c_master.h"
@@ -20,12 +21,7 @@ static i2c_master_bus_handle_t s_i2c;
 
 esp_err_t board_display_start(void)
 {
-    gpio_config_t backlight = {
-        .pin_bit_mask = 1ULL << GPIO_NUM_45,
-        .mode = GPIO_MODE_OUTPUT,
-    };
-    ESP_ERROR_CHECK(gpio_config(&backlight));
-    gpio_set_level(GPIO_NUM_45, 1);
+    screen_backlight_init(); /* LEDC PWM on GPIO45 (active high), full brightness */
 
     const spi_bus_config_t bus = {
         .sclk_io_num = GPIO_NUM_12,
@@ -62,6 +58,7 @@ esp_err_t board_display_start(void)
     ESP_ERROR_CHECK(esp_lcd_panel_swap_xy(panel, false));
     ESP_ERROR_CHECK(esp_lcd_panel_mirror(panel, true, false));
     ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(panel, true));
+    screen_set_panel(panel);
 
     lvgl_port_cfg_t lvgl_cfg = ESP_LVGL_PORT_INIT_CONFIG();
     lvgl_cfg.task_stack = 24576;

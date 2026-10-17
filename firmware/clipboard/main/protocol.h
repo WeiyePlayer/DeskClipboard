@@ -38,6 +38,7 @@
 #define CLIP_PAGE_DEVICES 5
 #define CLIP_PAGE_STORAGE 6
 #define CLIP_PAGE_PAIRING 7
+#define CLIP_PAGE_SCREEN 8 /* board-local: cycle the screen-off timeout */
 
 #define CLIP_MENU_FAVORITE 1
 #define CLIP_MENU_UNFAVORITE 2
@@ -76,4 +77,6 @@
 #define CLIP_ASSET_PASTE_ACCESS 31  /* written, auto paste needs Accessibility */
 #define CLIP_ASSET_PASTE_MANUAL 32  /* written, keystroke blocked: paste by hand */
 #define CLIP_ASSET_PASTED 33
-#define CLIP_ASSET_COUNT 34
+/* 息屏时间 labels, one per timeout option (30s, 1m, 2m, 5m, never). */
+#define CLIP_ASSET_SCREEN_BASE 34
+#define CLIP_ASSET_COUNT 39

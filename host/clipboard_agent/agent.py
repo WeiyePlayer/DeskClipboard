@@ -139,7 +139,9 @@ class Session:
     def publish(self, clip: Clip) -> None:
         if self._stale:
             return  # the pending full sync will carry it
-        self._send(card_frame(self.store, clip)) and self._send_all(sync_frames(self.store)[-2:])
+        if self._send(card_frame(self.store, clip)) and self._send_all(sync_frames(self.store)[-2:]):
+            kind = "图片" if clip.kind == "image" else "文字"
+            log(f"新卡片已送到开发板：{kind} #{clip.id}")
 
     def _resync(self) -> None:
         for frame in sync_frames(self.store):

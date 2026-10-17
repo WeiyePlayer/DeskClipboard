@@ -19,6 +19,7 @@ from clipboard_agent.hub_protocol import CHUNK, HubError, make_upload, error_mes
 from clipboard_agent.hub_transport import upload
 from clipboard_agent.ble_transport import BLETransport
 from clipboard_agent.platform_clipboard import native_clipboard
+from clipboard_agent import autopaste
 
 
 def support_dir() -> Path:
@@ -57,11 +58,14 @@ class Delivery:
     expires: float
     done: threading.Event = field(default_factory=threading.Event)
     success: bool = False
+    paste: str = autopaste.OFF
 
 
 class HubClient:
-    def __init__(self, config: dict, clipboard=None, transport=None):
+    def __init__(self, config: dict, clipboard=None, transport=None, paster=None):
         self.config = config
+        # None = clipboard only (tests); main() passes the native paster.
+        self.paster = paster if paster is not None else autopaste.AutoPaster(None, enabled=False)
         self.clipboard = clipboard if clipboard is not None else native_clipboard()
         self.transport = transport
         self.pending: queue.Queue = queue.Queue(maxsize=8)
@@ -111,6 +115,13 @@ class HubClient:
                 if len(self.received_order) > 128:
                     self.received.discard(self.received_order.popleft())
                 delivery.success = True
+                # Paste only inside the same lease, right after our own write;
+                # nothing is written or pasted once the deadline has passed.
+                try:
+                    delivery.paste = self.paster.paste(delivery.expires)
+                except Exception as exc:
+                    self.log("自动粘贴失败：" + type(exc).__name__)
+                    delivery.paste = autopaste.BLOCKED
         except Exception as exc:
             self.log("写入剪贴板失败：" + type(exc).__name__)
         finally:
@@ -144,8 +155,14 @@ class HubClient:
         self.deliveries.put(delivery, timeout=0.1)
         delivery.done.wait(max(0, delivery.expires - time.monotonic()))
         # An uncertain ACK is never retried by rewriting the clipboard.
-        self.transport.request({"op": "ack", "job_id": job["id"], "success": delivery.success})
-        self.log("已更新本机剪贴板" if delivery.success else "接收超时，未写入剪贴板")
+        self.transport.request({"op": "ack", "job_id": job["id"], "success": delivery.success,
+                                "paste": delivery.paste})
+        if not delivery.success:
+            self.log("接收超时，未写入剪贴板")
+        elif delivery.paste == autopaste.OFF:
+            self.log("已更新本机剪贴板")
+        else:
+            self.log(autopaste.message(delivery.paste))
 
     def progress(self):
         self.heartbeat()
@@ -192,6 +209,15 @@ class HubClient:
 
     def run(self):
         self.log("蓝牙剪贴板客户端：" + self.config["name"] + " - " + self.config["device_id"][:6])
+        if self.paster.enabled:
+            self.log("收到内容后自动粘贴：开启（--no-auto-paste 可关闭）")
+            try:
+                if self.paster.prepare():
+                    self.log(autopaste.message(autopaste.ACCESSIBILITY))
+            except Exception as exc:
+                self.log("无法检查辅助功能权限：" + type(exc).__name__)
+        else:
+            self.log("收到内容后自动粘贴：关闭，只更新剪贴板")
         worker = threading.Thread(target=self.network, daemon=True)
         worker.start()
         try:
@@ -281,6 +307,8 @@ def main(argv=None):
     parser.add_argument("--pair", action="store_true", help="通过 USB 配对另一台电脑")
     parser.add_argument("--status", action="store_true")
     parser.add_argument("--migrate", action="store_true")
+    parser.add_argument("--no-auto-paste", action="store_true",
+                        help="收到内容后只更新剪贴板，不自动按 Command-V / Ctrl-V")
     args = parser.parse_args(argv)
     if args.setup or args.setup_ui or args.pair:
         from clipboard_agent.hub_setup import setup
@@ -296,7 +324,8 @@ def main(argv=None):
         finally:
             transport.close()
         return 0
-    HubClient(config).run()
+    enabled = not args.no_auto_paste and config.get("auto_paste", True) is not False
+    HubClient(config, paster=autopaste.native_paster(enabled)).run()
     return 0
 
 

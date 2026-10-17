@@ -10,10 +10,11 @@ labels = {
     22: "发送失败，请重试", 23: "正在发送，请稍候", 24: "复制内容后显示在这里",
     25: "请先通过 USB 配置", 26: "已暂停记录", 27: "空间已满，请清理记录",
     28: "操作失败，请重试", 29: "请升级电脑端程序", 30: "已开放 USB 配对",
+    31: "已写入剪贴板，请开启辅助功能", 32: "已写入剪贴板，请手动粘贴", 33: "已在对方电脑粘贴",
 }
 frames = chrome_frames()
 for key, value in labels.items():
-    toast = 21 <= key <= 23 or 26 <= key <= 30
+    toast = 21 <= key <= 23 or 26 <= key <= 33
     raster = render_label(value, (32, 32, 32) if toast else (255, 255, 255),
                           foreground=(255, 255, 255) if toast else (20, 20, 20))
     frames.append(encode_asset(key, raster.width, raster.height, raster.rgb565))

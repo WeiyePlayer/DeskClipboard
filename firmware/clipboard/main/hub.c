@@ -687,7 +687,17 @@ static cJSON* request_locked(const cJSON* r, bool usb, const char* token)
         }
         bool success = peer->ready && cJSON_IsTrue(cJSON_GetObjectItem(r, "success"));
         clear_job(peer, false);
-        s_notice = success ? CLIP_ASSET_SENT : CLIP_ASSET_SEND_FAILED;
+        /* "paste" is the receiver's auto-paste outcome (absent from older
+         * clients, "off" when disabled): pick the matching toast. */
+        const char* paste = str(r, "paste");
+        uint8_t done = CLIP_ASSET_SENT;
+        if (!strcmp(paste, "pasted"))
+            done = CLIP_ASSET_PASTED;
+        else if (!strcmp(paste, "accessibility"))
+            done = CLIP_ASSET_PASTE_ACCESS;
+        else if (!strcmp(paste, "secure_input") || !strcmp(paste, "blocked"))
+            done = CLIP_ASSET_PASTE_MANUAL;
+        s_notice = success ? done : CLIP_ASSET_SEND_FAILED;
         return answer(NULL);
     }
     if (usb && !strcmp(op, "test_select"))

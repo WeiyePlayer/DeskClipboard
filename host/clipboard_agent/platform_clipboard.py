@@ -1,4 +1,4 @@
-"""Native Mac/Windows clipboard adapters. Receiving never simulates a key."""
+"""Native Mac/Windows clipboard adapters. Auto paste lives in autopaste.py."""
 from __future__ import annotations
 
 import ctypes

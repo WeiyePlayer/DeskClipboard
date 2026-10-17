@@ -73,4 +73,7 @@
 #define CLIP_ASSET_ERROR 28
 #define CLIP_ASSET_UPGRADE 29
 #define CLIP_ASSET_PAIR_OPEN 30
-#define CLIP_ASSET_COUNT 31
+#define CLIP_ASSET_PASTE_ACCESS 31  /* written, auto paste needs Accessibility */
+#define CLIP_ASSET_PASTE_MANUAL 32  /* written, keystroke blocked: paste by hand */
+#define CLIP_ASSET_PASTED 33
+#define CLIP_ASSET_COUNT 34

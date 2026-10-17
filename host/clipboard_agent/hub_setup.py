@@ -50,7 +50,7 @@ def setup(args):
             return setup_ui(link, args)
         result = pair(link, args)
         print("USB 信任配对完成；日常通过蓝牙连接：DeskClip-" + result["board_id"][-6:])
-        print("启动：python -m clipboard_agent")
+        print("启动：" + ("powershell -ExecutionPolicy Bypass -File .\\scripts\\run-windows.ps1" if sys.platform.startswith("win") else "./scripts/run-mac.command"))
         return 0
     except HubError as e:
         if e.code == "pairing_closed":

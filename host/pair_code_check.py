@@ -1,7 +1,8 @@
 """Real-board check of phone pairing by code, run from the Mac.
 
 Opens the pairing window over USB (needs this Mac's existing credential),
-pairs a temporary "android" test peer over BLE with the code, runs an
+pairs a temporary "android" test peer over BLE (stop the Mac
+background client first: macOS shares one BLE link per board between apps) with the code, runs an
 authenticated status request with the derived credential, checks that a
 wrong code is rejected, then revokes the test peer. Nothing is printed
 that is secret (codes are single-use and the test peer is removed).
@@ -59,12 +60,20 @@ def main(argv=None):
             results["wrong_code_rejected"] = exc.code == "bad_code"
         peers = usb.request({"op": "status"})
         results["status_ok"] = bool(peers.get("ok"))
+    except Exception as exc:  # report which step failed instead of a bare traceback
+        results["error"] = f"{type(exc).__name__}: {exc}"
     finally:
         try:
             usb.request({"op": "revoke", "device_id": device})
             results["test_peer_revoked"] = True
         except HubError as exc:
             results["test_peer_revoked"] = exc.code
+        # A second revoke must find nothing: the test peer is gone.
+        try:
+            usb.request({"op": "revoke", "device_id": device})
+            results["test_peer_gone"] = False
+        except HubError as exc:
+            results["test_peer_gone"] = exc.code == "not_found"
         usb.close()
     print(json.dumps(results, indent=2))
     return 0 if all(v is True for v in results.values()) else 1

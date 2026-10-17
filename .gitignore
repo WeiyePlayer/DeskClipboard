@@ -1,4 +1,6 @@
 .venv/
+.venv-win/
+dist/
 __pycache__/
 .DS_Store
 backups/

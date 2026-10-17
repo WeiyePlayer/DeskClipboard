@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import sys
 
 from clipboard_agent.extract import extract_chips
 from clipboard_agent.frames import REGION_BODY, REGION_CHIP, REGION_MENU, Region
@@ -19,6 +20,9 @@ _LINE = 20
 _MAX_LINES = 2
 _THUMB_H = 96
 _THUMB_W = 140
+_IMAGE_META_GAP = 6
+_IMAGE_META_H = 20
+_PAGE_BG = (228, 228, 233)  # Screen background in firmware main/ui.c.
 
 
 @dataclass(frozen=True)
@@ -36,9 +40,11 @@ def render_text_card(text: str, chips: list[str] | None = None) -> Raster:
     if pieces:
         chip_block = 6 + len(pieces) * 28
     height = _PAD + text_height + chip_block + _PAD
-    canvas = _Canvas(CARD_WIDTH, height, (255, 255, 255))
+    canvas = _Canvas(CARD_WIDTH, height, _PAGE_BG)
     canvas.round_rect(0, 0, CARD_WIDTH, height, 14, (255, 255, 255))
-    canvas.text(text, _PAD, _PAD, CARD_WIDTH - 36, text_height, _TEXT_SIZE, (20, 20, 20))
+    # Only two lines are visible. Bound layout work for 64KiB unbroken text;
+    # the complete original remains in the upload payload and clipboard.
+    canvas.text(text[:512], _PAD, _PAD, CARD_WIDTH - 36, text_height, _TEXT_SIZE, (20, 20, 20))
     canvas.dots(CARD_WIDTH - 18, 18)
     regions = [
         Region(REGION_BODY, 0, 0, 0, CARD_WIDTH - MENU_STRIP, height),
@@ -56,16 +62,16 @@ def render_text_card(text: str, chips: list[str] | None = None) -> Raster:
 
 
 def render_image_card(png: bytes, pixel_width: int, pixel_height: int) -> Raster:
-    height = _PAD + _THUMB_H + 22 + _PAD
-    canvas = _Canvas(CARD_WIDTH, height, (255, 255, 255))
+    height = _PAD + _THUMB_H + _IMAGE_META_GAP + _IMAGE_META_H + _PAD
+    canvas = _Canvas(CARD_WIDTH, height, _PAGE_BG)
     canvas.round_rect(0, 0, CARD_WIDTH, height, 14, (255, 255, 255))
     canvas.image(png, _PAD, _PAD, _THUMB_W, _THUMB_H)
     canvas.text(
         f"{pixel_width}×{pixel_height}",
-        _PAD + _THUMB_W + 8,
-        _PAD + 8,
-        CARD_WIDTH - _THUMB_W - 40,
-        24,
+        _PAD,
+        _PAD + _THUMB_H + _IMAGE_META_GAP,
+        CARD_WIDTH - 2 * _PAD,
+        _IMAGE_META_H,
         _CHIP_SIZE,
         (90, 90, 90),
     )
@@ -90,7 +96,20 @@ def render_label(
     return Raster(width, height, canvas.rgb565())
 
 
+def render_tab_label(text: str, background: tuple[int, int, int]) -> Raster:
+    # Fit the opaque RGB565 label inside the native rounded selection.
+    width, height, size = 48, 24, 14
+    canvas = _Canvas(width, height, background)
+    text_width = _text_width(text, size) - 8
+    canvas.text(text, (width - text_width) // 2, 4, text_width + 2, height - 6,
+                size, (51, 51, 51))
+    return Raster(width, height, canvas.rgb565())
+
+
 def _text_width(text: str, size: int) -> int:
+    if sys.platform == "win32":
+        from clipboard_agent.pillow_canvas import text_width
+        return text_width(text, size)
     from AppKit import NSFont, NSFontAttributeName, NSString
 
     font = NSFont.fontWithName_size_("PingFangSC-Regular", size) or NSFont.systemFontOfSize_(size)
@@ -253,3 +272,7 @@ def _zero_rect():
     from AppKit import NSZeroRect
 
     return NSZeroRect
+
+
+if sys.platform == "win32":
+    from clipboard_agent.pillow_canvas import PillowCanvas as _Canvas

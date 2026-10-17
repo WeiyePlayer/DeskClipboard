@@ -117,6 +117,8 @@ class Session:
     def _note_hello(self, frame) -> str:
         if frame.payload:
             self.board_version = frame.payload[0]
+            if self.board_version >= 4:
+                raise SystemExit("开发板已升级为独立中枢，请运行 python -m clipboard_agent 使用新版客户端")
         return describe_hello(frame)
 
     def _send(self, frame: bytes) -> bool:

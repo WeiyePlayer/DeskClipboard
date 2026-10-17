@@ -1,9 +1,17 @@
 import unittest
+import time
 
 from clipboard_agent.extract import extract_chips
 
 
 class ExtractTest(unittest.TestCase):
+    def test_long_unbroken_text_does_not_retry_email_at_every_character(self):
+        start=time.monotonic()
+        self.assertEqual(extract_chips("x"*65536),[])
+        self.assertEqual(extract_chips("x"*64000+"@invalid"),[])
+        self.assertEqual(extract_chips("13800138000 "*5000),["13800138000"]*3)
+        self.assertLess(time.monotonic()-start,1)
+
     def test_phone_url_and_code(self):
         text = "四川省成都市郫都区欣茂西郡兰庭 张世伦 13558801181"
         self.assertEqual(extract_chips(text), ["13558801181"])

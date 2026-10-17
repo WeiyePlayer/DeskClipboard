@@ -23,10 +23,10 @@ from clipboard_agent.frames import (
     encode_order,
     encode_toast,
 )
-from clipboard_agent.render import render_image_card, render_label, render_text_card
+from clipboard_agent.render import render_image_card, render_label, render_tab_label, render_text_card
 from clipboard_agent.store import Clip, Store
 
-_GRAY = (242, 242, 247)
+_SEGMENT_BG = (216, 216, 222)  # SEGMENT_BG in firmware main/ui.c
 _WHITE = (255, 255, 255)
 _DEVICE_LIMIT = 40
 
@@ -34,9 +34,9 @@ _DEVICE_LIMIT = 40
 def chrome_frames() -> list[bytes]:
     labels = [
         (ASSET_TAB_CLIP_ON, "剪贴板", _WHITE),
-        (ASSET_TAB_CLIP_OFF, "剪贴板", _GRAY),
+        (ASSET_TAB_CLIP_OFF, "剪贴板", _SEGMENT_BG),
         (ASSET_TAB_FAV_ON, "常用语", _WHITE),
-        (ASSET_TAB_FAV_OFF, "常用语", _GRAY),
+        (ASSET_TAB_FAV_OFF, "常用语", _SEGMENT_BG),
         (ASSET_CLEAR, "清空剪贴板历史", _WHITE),
         (ASSET_PAUSE, "暂停记录", _WHITE),
         (ASSET_RESUME, "继续记录", _WHITE),
@@ -49,7 +49,10 @@ def chrome_frames() -> list[bytes]:
     ]
     frames = []
     for asset_id, text, background in labels:
-        raster = render_label(text, background)
+        if asset_id in (ASSET_TAB_CLIP_ON, ASSET_TAB_CLIP_OFF, ASSET_TAB_FAV_ON, ASSET_TAB_FAV_OFF):
+            raster = render_tab_label(text, background)
+        else:
+            raster = render_label(text, background)
         frames.append(encode_asset(asset_id, raster.width, raster.height, raster.rgb565))
     return frames
 

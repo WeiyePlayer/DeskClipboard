@@ -16,6 +16,8 @@
 #include "soc/soc.h"
 #include "tusb_cdc_acm.h"
 #include "ui.h"
+#include "hub.h"
+#include "hub_assets.h"
 
 static const char *TAG = "link";
 
@@ -146,22 +148,6 @@ static void s_on_tap(uint32_t id, uint8_t kind, uint8_t chip)
     link_send(CLIP_TAP, payload, sizeof(payload));
 }
 
-static void s_on_menu(uint32_t id, uint8_t action)
-{
-    uint8_t payload[5];
-    memcpy(payload, &id, 4);
-    payload[4] = action;
-    link_send(CLIP_MENU, payload, sizeof(payload));
-}
-
-static void s_on_page(uint8_t action)
-{
-    if (action == CLIP_PAGE_TOP) {
-        return;
-    }
-    link_send(CLIP_PAGE_ACTION, &action, 1);
-}
-
 static void s_enter_download(void)
 {
     vTaskDelay(pdMS_TO_TICKS(50));
@@ -174,84 +160,27 @@ static void s_enter_download(void)
 static void s_handle(uint8_t type, uint8_t *payload, uint32_t length)
 {
     s_host_seen = true;
-    if (type == CLIP_CARD_PUT && length >= 10) {
-        uint32_t id;
-        uint16_t width;
-        uint16_t height;
-        memcpy(&id, payload, 4);
-        memcpy(&width, payload + 5, 2);
-        memcpy(&height, payload + 7, 2);
-        uint8_t regions = payload[9];
-        uint32_t region_bytes = (uint32_t)regions * 10;
-        if (10u + region_bytes > length) {
-            s_ack(CLIP_NACK);
-            return;
+    if (type == CLIP_RPC && length >= 4 && length <= 48 * 1024 + 4) {
+        char *json = calloc(length - 4 + 1, 1);
+        if (!json) { s_ack(CLIP_NACK); return; }
+        memcpy(json, payload + 4, length - 4);
+        cJSON *request = cJSON_Parse(json);
+        free(json);
+        cJSON *reply = hub_request(request, true, NULL);
+        cJSON_Delete(request);
+        char *body = cJSON_PrintUnformatted(reply);
+        cJSON_Delete(reply);
+        if (body) {
+            size_t n = strlen(body);
+            uint8_t *out = malloc(n + 4);
+            if (out) { memcpy(out, payload, 4); memcpy(out + 4, body, n); link_send(CLIP_RPC_REPLY, out, n + 4); free(out); }
+            free(body);
         }
-        const uint8_t *pixels = payload + 10 + region_bytes;
-        uint32_t pixel_bytes = length - 10 - region_bytes;
-        if (pixel_bytes != (uint32_t)width * height * 2) {
-            s_ack(CLIP_NACK);
-            return;
-        }
-        uint32_t dropped = 0;
-        if (!ui_put_card(id, pixels, width, height, payload + 10, regions, &dropped)) {
-            s_ack(CLIP_NACK);
-            return;
-        }
-        if (dropped != 0) {
-            link_send(CLIP_CARD_DROP, (const uint8_t *)&dropped, 4);
-        }
-        s_ack(CLIP_ACK);
         return;
     }
-    if (type == CLIP_CARD_DEL && length == 4) {
-        uint32_t id;
-        memcpy(&id, payload, 4);
-        ui_delete_card(id);
-        s_ack(CLIP_ACK);
-        return;
-    }
-    if (type == CLIP_LIST_ORDER && length >= 3) {
-        uint16_t count;
-        memcpy(&count, payload + 1, 2);
-        if (3u + count * 4u != length || count > 80) {
-            s_ack(CLIP_NACK);
-            return;
-        }
-        uint32_t ids[80];
-        for (uint16_t i = 0; i < count; i++) {
-            memcpy(&ids[i], payload + 3 + i * 4, 4);
-        }
-        ui_set_order(payload[0], ids, count);
-        s_ack(CLIP_ACK);
-        return;
-    }
-    if (type == CLIP_ASSET_PUT && length >= 5) {
-        uint16_t width;
-        uint16_t height;
-        memcpy(&width, payload + 1, 2);
-        memcpy(&height, payload + 3, 2);
-        if (5u + (uint32_t)width * height * 2u != length) {
-            s_ack(CLIP_NACK);
-            return;
-        }
-        ui_set_asset(payload[0], payload + 5, width, height);
-        s_ack(CLIP_ACK);
-        return;
-    }
-    if (type == CLIP_TOAST && length >= 6) {
-        uint16_t duration;
-        uint16_t width;
-        uint16_t height;
-        memcpy(&duration, payload, 2);
-        memcpy(&width, payload + 2, 2);
-        memcpy(&height, payload + 4, 2);
-        if (6u + (uint32_t)width * height * 2u != length) {
-            s_ack(CLIP_NACK);
-            return;
-        }
-        ui_toast(payload + 6, width, height, duration);
-        s_ack(CLIP_ACK);
+    if (type != CLIP_ENTER_BOOT && type != CLIP_VERIFY_TAP) {
+        /* V3 hosts must never replace the hub's authoritative history/UI. */
+        s_ack(CLIP_NACK);
         return;
     }
     if (type == CLIP_VERIFY_TAP && length == 6) {
@@ -358,6 +287,5 @@ void link_start(void)
     s_mutex = xSemaphoreCreateMutex();
     s_tx_mutex = xSemaphoreCreateMutex();
     s_data = xSemaphoreCreateBinary();
-    ui_set_handlers(s_on_tap, s_on_menu, s_on_page);
     xTaskCreate(s_task, "link", 8192, NULL, 5, NULL);
 }

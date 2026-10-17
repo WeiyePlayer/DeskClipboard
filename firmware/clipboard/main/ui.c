@@ -1,6 +1,7 @@
 #include "ui.h"
 
 #include <string.h>
+#include <stdio.h>
 
 #include "esp_heap_caps.h"
 #include "esp_log.h"
@@ -11,6 +12,10 @@
 #define MAX_REGIONS 8
 #define SCREEN_W 240
 #define CARD_W 224
+#define HEADER_H 48
+#define SEGMENT_W 128
+#define SEGMENT_H 32
+#define SEGMENT_BG 0xD8D8DE
 
 typedef struct {
     uint8_t kind;
@@ -59,6 +64,13 @@ static lv_obj_t *s_toast;
 static lv_timer_t *s_toast_timer;
 static uint32_t s_menu_id;
 static bool s_recording_paused;
+static lv_obj_t *s_hub_layer;
+static lv_obj_t *s_empty;
+static ui_send_fn s_send;
+static ui_revoke_fn s_revoke;
+static ui_peer_t s_peers[UI_MAX_PEERS];
+static uint32_t s_target_id;
+static uint8_t s_target_kind, s_target_chip;
 
 static uint8_t *s_alloc_rgb565(const uint8_t *src, uint16_t width, uint16_t height,
                              uint32_t *stride_out, uint32_t *size_out)
@@ -148,20 +160,12 @@ static void s_tab_event(lv_event_t *event)
     s_show_tab((uint8_t)(uintptr_t)lv_event_get_user_data(event));
 }
 
-static void s_top_event(lv_event_t *event)
-{
-    (void)event;
-    ui_scroll_top();
-    if (s_page) {
-        s_page(CLIP_PAGE_TOP);
-    }
-}
-
 static void s_close_layers(void)
 {
     lv_obj_add_flag(s_page_menu, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_item_menu, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(s_confirm, LV_OBJ_FLAG_HIDDEN);
+    if (s_hub_layer) lv_obj_add_flag(s_hub_layer, LV_OBJ_FLAG_HIDDEN);
 }
 
 static void s_layer_clicked(lv_event_t *event)
@@ -178,7 +182,11 @@ static void s_page_menu_event(lv_event_t *event)
     s_apply_asset(lv_obj_get_child(box, 0), CLIP_ASSET_CLEAR);
     s_apply_asset(lv_obj_get_child(box, 1),
                   s_recording_paused ? CLIP_ASSET_RESUME : CLIP_ASSET_PAUSE);
+    s_apply_asset(lv_obj_get_child(box, 2), CLIP_ASSET_DEVICES);
+    s_apply_asset(lv_obj_get_child(box, 3), CLIP_ASSET_PAIRING);
+    s_apply_asset(lv_obj_get_child(box, 4), CLIP_ASSET_STORAGE);
     lv_obj_remove_flag(s_page_menu, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(s_page_menu);
 }
 
 static void s_page_action_event(lv_event_t *event)
@@ -192,6 +200,7 @@ static void s_page_action_event(lv_event_t *event)
         s_apply_asset(lv_obj_get_child(row, 0), CLIP_ASSET_CONFIRM);
         s_apply_asset(lv_obj_get_child(row, 1), CLIP_ASSET_CANCEL);
         lv_obj_remove_flag(s_confirm, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_move_foreground(s_confirm);
         return;
     }
     if (action == CLIP_PAGE_PAUSE) {
@@ -241,6 +250,7 @@ static void s_hit_event(lv_event_t *event)
         lv_obj_set_user_data(fav, (void *)(uintptr_t)(favorite ? CLIP_MENU_UNFAVORITE : CLIP_MENU_FAVORITE));
         lv_obj_set_user_data(drop, (void *)(uintptr_t)CLIP_MENU_DELETE);
         lv_obj_remove_flag(s_item_menu, LV_OBJ_FLAG_HIDDEN);
+        lv_obj_move_foreground(s_item_menu);
         return;
     }
     if (s_tap) {
@@ -256,7 +266,8 @@ static void s_toast_hide(lv_timer_t *timer)
     lv_obj_add_flag(s_toast, LV_OBJ_FLAG_HIDDEN);
 }
 
-static lv_obj_t *s_circle_button(lv_obj_t *parent, lv_event_cb_t callback)
+/* The single header action is the home for page actions and future settings. */
+static lv_obj_t *s_settings_button(lv_obj_t *parent)
 {
     lv_obj_t *button = lv_obj_create(parent);
     lv_obj_set_size(button, 32, 32);
@@ -264,8 +275,35 @@ static lv_obj_t *s_circle_button(lv_obj_t *parent, lv_event_cb_t callback)
     lv_obj_set_style_bg_color(button, lv_color_white(), 0);
     lv_obj_set_style_border_width(button, 0, 0);
     lv_obj_set_style_pad_all(button, 0, 0);
-    lv_obj_add_event_cb(button, callback, LV_EVENT_CLICKED, NULL);
+    lv_obj_remove_flag(button, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_event_cb(button, s_page_menu_event, LV_EVENT_CLICKED, NULL);
+    for (int offset = -6; offset <= 6; offset += 6) {
+        lv_obj_t *dot = lv_obj_create(button);
+        lv_obj_set_size(dot, 3, 3);
+        lv_obj_set_style_radius(dot, LV_RADIUS_CIRCLE, 0);
+        lv_obj_set_style_bg_color(dot, lv_color_hex(0x333333), 0);
+        lv_obj_set_style_border_width(dot, 0, 0);
+        lv_obj_set_style_pad_all(dot, 0, 0);
+        lv_obj_remove_flag(dot, LV_OBJ_FLAG_CLICKABLE | LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_align(dot, LV_ALIGN_CENTER, offset, 0);
+    }
     return button;
+}
+
+static lv_obj_t *s_segment_tab(lv_obj_t *segment, uint8_t tab)
+{
+    lv_obj_t *hit = lv_obj_create(segment);
+    lv_obj_set_size(hit, SEGMENT_W / 2, SEGMENT_H);
+    lv_obj_set_pos(hit, tab * (SEGMENT_W / 2), 0);
+    lv_obj_set_style_bg_opa(hit, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(hit, 0, 0);
+    lv_obj_set_style_pad_all(hit, 0, 0);
+    lv_obj_remove_flag(hit, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_event_cb(hit, s_tab_event, LV_EVENT_CLICKED, (void *)(uintptr_t)tab);
+    lv_obj_t *label = lv_image_create(hit);
+    lv_obj_remove_flag(label, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_center(label);
+    return label;
 }
 
 static lv_obj_t *s_image_button(lv_obj_t *parent, lv_event_cb_t callback, void *user)
@@ -279,7 +317,7 @@ static lv_obj_t *s_image_button(lv_obj_t *parent, lv_event_cb_t callback, void *
 static lv_obj_t *s_make_list(lv_obj_t *parent)
 {
     lv_obj_t *list = lv_obj_create(parent);
-    lv_obj_set_size(list, SCREEN_W, 320 - 52);
+    lv_obj_set_size(list, SCREEN_W, 320 - HEADER_H - 4);
     lv_obj_align(list, LV_ALIGN_BOTTOM_MID, 0, 0);
     lv_obj_set_style_bg_opa(list, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(list, 0, 0);
@@ -307,40 +345,37 @@ void ui_init(void)
 {
     lvgl_port_lock(0);
     lv_obj_t *screen = lv_screen_active();
-    lv_obj_set_style_bg_color(screen, lv_color_hex(0xF2F2F7), 0);
+    lv_obj_set_style_bg_color(screen, lv_color_hex(0xE4E4E9), 0);
     lv_obj_set_style_pad_all(screen, 0, 0);
 
     lv_obj_t *bar = lv_obj_create(screen);
-    lv_obj_set_size(bar, SCREEN_W, 48);
+    lv_obj_set_size(bar, SCREEN_W, HEADER_H);
     lv_obj_align(bar, LV_ALIGN_TOP_MID, 0, 0);
     lv_obj_set_style_bg_opa(bar, LV_OPA_TRANSP, 0);
     lv_obj_set_style_border_width(bar, 0, 0);
-    lv_obj_set_style_pad_hor(bar, 8, 0);
-    lv_obj_set_flex_flow(bar, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(bar, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_all(bar, 0, 0);
+    lv_obj_remove_flag(bar, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
 
-    s_circle_button(bar, s_top_event);
     lv_obj_t *segment = lv_obj_create(bar);
-    lv_obj_set_size(segment, 150, 32);
-    lv_obj_set_style_radius(segment, 16, 0);
-    lv_obj_set_style_bg_color(segment, lv_color_hex(0xE4E4EA), 0);
+    lv_obj_set_size(segment, SEGMENT_W, SEGMENT_H);
+    lv_obj_center(segment);
+    lv_obj_set_style_radius(segment, 8, 0);
+    lv_obj_set_style_bg_color(segment, lv_color_hex(SEGMENT_BG), 0);
     lv_obj_set_style_border_width(segment, 0, 0);
     lv_obj_set_style_pad_all(segment, 0, 0);
+    lv_obj_remove_flag(segment, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
     s_pill = lv_obj_create(segment);
-    lv_obj_set_size(s_pill, 72, 28);
-    lv_obj_set_style_radius(s_pill, 14, 0);
+    lv_obj_set_size(s_pill, SEGMENT_W / 2 - 4, SEGMENT_H - 4);
+    lv_obj_set_style_radius(s_pill, 6, 0);
     lv_obj_set_style_bg_color(s_pill, lv_color_white(), 0);
     lv_obj_set_style_border_width(s_pill, 0, 0);
+    lv_obj_set_style_pad_all(s_pill, 0, 0);
+    lv_obj_remove_flag(s_pill, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
     lv_obj_align(s_pill, LV_ALIGN_LEFT_MID, 2, 0);
-    s_tab_clip = lv_image_create(segment);
-    s_tab_fav = lv_image_create(segment);
-    lv_obj_add_flag(s_tab_clip, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_flag(s_tab_fav, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_align(s_tab_clip, LV_ALIGN_LEFT_MID, 10, 0);
-    lv_obj_align(s_tab_fav, LV_ALIGN_RIGHT_MID, -10, 0);
-    lv_obj_add_event_cb(s_tab_clip, s_tab_event, LV_EVENT_CLICKED, (void *)(uintptr_t)CLIP_LIST_CLIPBOARD);
-    lv_obj_add_event_cb(s_tab_fav, s_tab_event, LV_EVENT_CLICKED, (void *)(uintptr_t)CLIP_LIST_FAVORITES);
-    s_circle_button(bar, s_page_menu_event);
+    s_tab_clip = s_segment_tab(segment, CLIP_LIST_CLIPBOARD);
+    s_tab_fav = s_segment_tab(segment, CLIP_LIST_FAVORITES);
+    lv_obj_t *settings = s_settings_button(bar);
+    lv_obj_align(settings, LV_ALIGN_RIGHT_MID, -8, 0);
 
     s_clip_list = s_make_list(screen);
     s_fav_list = s_make_list(screen);
@@ -348,12 +383,15 @@ void ui_init(void)
 
     s_page_menu = s_layer(screen);
     lv_obj_t *page_box = lv_obj_create(s_page_menu);
-    lv_obj_set_size(page_box, 180, 90);
+    lv_obj_set_size(page_box, 204, 190);
     lv_obj_align(page_box, LV_ALIGN_TOP_RIGHT, -8, 52);
     lv_obj_set_flex_flow(page_box, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_row(page_box, 8, 0);
     s_image_button(page_box, s_page_action_event, (void *)(uintptr_t)CLIP_PAGE_CLEAR);
     s_image_button(page_box, s_page_action_event, (void *)(uintptr_t)CLIP_PAGE_PAUSE);
+    s_image_button(page_box, s_page_action_event, (void *)(uintptr_t)CLIP_PAGE_DEVICES);
+    s_image_button(page_box, s_page_action_event, (void *)(uintptr_t)CLIP_PAGE_PAIRING);
+    s_image_button(page_box, s_page_action_event, (void *)(uintptr_t)CLIP_PAGE_STORAGE);
 
     s_item_menu = s_layer(screen);
     lv_obj_t *item_box = lv_obj_create(s_item_menu);
@@ -385,6 +423,10 @@ void ui_init(void)
     lv_obj_align(s_toast, LV_ALIGN_BOTTOM_MID, 0, -12);
     lv_obj_add_flag(s_toast, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(s_toast);
+    s_hub_layer = s_layer(screen);
+    s_empty = lv_image_create(screen);
+    lv_obj_align(s_empty, LV_ALIGN_CENTER, 0, 20);
+    lv_obj_add_flag(s_empty, LV_OBJ_FLAG_HIDDEN);
     lvgl_port_unlock();
 }
 
@@ -446,6 +488,15 @@ static void s_delete_unlocked(uint32_t id)
     s_free_widget(&card->fav_obj);
     free(card->pixels);
     memset(card, 0, sizeof(*card));
+}
+
+void ui_reset_cards(void)
+{
+    lvgl_port_lock(0);
+    for (size_t i = 0; i < MAX_CARDS; i++) {
+        if (s_cards[i].used) s_delete_unlocked(s_cards[i].id);
+    }
+    lvgl_port_unlock();
 }
 
 static lv_obj_t *s_build_card(card_t *card, lv_obj_t *parent)
@@ -573,7 +624,7 @@ void ui_set_order(uint8_t list_id, const uint32_t *ids, uint16_t count)
     }
     lvgl_port_lock(0);
     if (list_id == CLIP_LIST_FAVORITES) {
-        memcpy(s_fav_order, ids, count * sizeof(uint32_t));
+        if (count) memcpy(s_fav_order, ids, count * sizeof(uint32_t));
         s_fav_count = count;
         for (int i = 0; i < MAX_CARDS; i++) {
             s_cards[i].fav_obj = NULL;
@@ -586,7 +637,7 @@ void ui_set_order(uint8_t list_id, const uint32_t *ids, uint16_t count)
             }
         }
     } else {
-        memcpy(s_clip_order, ids, count * sizeof(uint32_t));
+        if (count) memcpy(s_clip_order, ids, count * sizeof(uint32_t));
         s_clip_count = count;
         for (int i = 0; i < MAX_CARDS; i++) {
             s_cards[i].clip_obj = NULL;
@@ -645,5 +696,102 @@ void ui_scroll_top(void)
 {
     lvgl_port_lock(0);
     lv_obj_scroll_to_y(s_tab == CLIP_LIST_FAVORITES ? s_fav_list : s_clip_list, 0, LV_ANIM_OFF);
+    lvgl_port_unlock();
+}
+
+void ui_set_hub_handlers(ui_send_fn send, ui_revoke_fn revoke)
+{
+    s_send = send;
+    s_revoke = revoke;
+}
+
+static lv_obj_t *s_hub_box(uint8_t title)
+{
+    s_close_layers();
+    lv_obj_clean(s_hub_layer);
+    lv_obj_t *box = lv_obj_create(s_hub_layer);
+    lv_obj_set_size(box, 224, LV_SIZE_CONTENT);
+    lv_obj_set_style_max_height(box, 280, 0);
+    lv_obj_center(box);
+    lv_obj_set_flex_flow(box, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_all(box, 12, 0);
+    lv_obj_set_style_pad_row(box, 8, 0);
+    s_apply_asset(lv_image_create(box), title);
+    lv_obj_remove_flag(s_hub_layer, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(s_hub_layer);
+    return box;
+}
+
+static void s_target_event(lv_event_t *event)
+{
+    ui_peer_t *peer = lv_event_get_user_data(event);
+    if (!peer->online) return;
+    s_close_layers();
+    if (s_send) s_send(s_target_id, s_target_kind, s_target_chip, peer->id);
+}
+
+static void s_revoke_event(lv_event_t *event)
+{
+    ui_peer_t *peer = lv_event_get_user_data(event);
+    s_close_layers();
+    if (s_revoke) s_revoke(peer->id);
+}
+
+static void s_peer_buttons(lv_obj_t *box, const ui_peer_t *peers, size_t count, bool revoke)
+{
+    if (count > UI_MAX_PEERS) count = UI_MAX_PEERS;
+    memcpy(s_peers, peers, count * sizeof(*peers));
+    for (size_t i = 0; i < count; i++) {
+        lv_obj_t *button = lv_button_create(box);
+        lv_obj_set_size(button, 196, 34);
+        lv_obj_add_event_cb(button, revoke ? s_revoke_event : s_target_event,
+                            LV_EVENT_CLICKED, &s_peers[i]);
+        lv_obj_t *label = lv_label_create(button);
+        char text[80];
+        snprintf(text, sizeof(text), "%s%s", s_peers[i].label,
+                 revoke ? "  [remove]" : (s_peers[i].online ? "" : "  [offline]"));
+        lv_label_set_text(label, text);
+        lv_obj_center(label);
+        if (!revoke && !s_peers[i].online) lv_obj_add_state(button, LV_STATE_DISABLED);
+    }
+    if (!count) lv_label_set_text(lv_label_create(box), "No paired computers");
+    s_apply_asset(s_image_button(box, s_layer_clicked, NULL), CLIP_ASSET_CANCEL);
+}
+
+void ui_show_targets(uint32_t id, uint8_t kind, uint8_t chip, const ui_peer_t *peers, size_t count)
+{
+    lvgl_port_lock(0);
+    s_target_id = id;
+    s_target_kind = kind;
+    s_target_chip = chip;
+    s_peer_buttons(s_hub_box(CLIP_ASSET_TARGET_TITLE), peers, count, false);
+    lvgl_port_unlock();
+}
+
+void ui_show_peers(const ui_peer_t *peers, size_t count)
+{
+    lvgl_port_lock(0);
+    s_peer_buttons(s_hub_box(CLIP_ASSET_PAIR_TITLE), peers, count, true);
+    lvgl_port_unlock();
+}
+
+void ui_show_info(uint8_t title_asset, const char *text)
+{
+    lvgl_port_lock(0);
+    lv_obj_t *box = s_hub_box(title_asset);
+    lv_obj_t *label = lv_label_create(box);
+    lv_obj_set_width(label, 196);
+    lv_label_set_text(label, text);
+    s_apply_asset(s_image_button(box, s_layer_clicked, NULL), CLIP_ASSET_CANCEL);
+    lvgl_port_unlock();
+}
+
+void ui_set_state(bool paused, bool empty, bool setup)
+{
+    lvgl_port_lock(0);
+    s_recording_paused = paused;
+    s_apply_asset(s_empty, setup ? CLIP_ASSET_SETUP : CLIP_ASSET_EMPTY);
+    if (empty || setup) lv_obj_remove_flag(s_empty, LV_OBJ_FLAG_HIDDEN);
+    else lv_obj_add_flag(s_empty, LV_OBJ_FLAG_HIDDEN);
     lvgl_port_unlock();
 }

@@ -1,4 +1,4 @@
-# DeskClipboard: run the client hidden at logon (Task Scheduler), restart on failure.
+﻿# DeskClipboard: run the client hidden at logon (Task Scheduler), restart on failure.
 # Run: powershell -ExecutionPolicy Bypass -File scripts\install-windows-autostart.ps1
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot

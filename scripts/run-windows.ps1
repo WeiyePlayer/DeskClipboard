@@ -1,4 +1,4 @@
-param([switch]$Pair, [switch]$Status)
+﻿param([switch]$Pair, [switch]$Status)
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
 Set-Location $projectRoot

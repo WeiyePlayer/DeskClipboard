@@ -1,0 +1,7 @@
+# Windows PowerShell 5.1 reads BOM-less UTF-8 as the ANSI code page (GBK on
+# Chinese Windows). .ps1 files are stored byte-for-byte as UTF-8 with BOM and
+# CRLF; -text stops git from converting them on checkout or in archives.
+*.ps1 -text
+# Shell scripts must stay LF to run on macOS.
+*.command text eol=lf
+*.sh text eol=lf

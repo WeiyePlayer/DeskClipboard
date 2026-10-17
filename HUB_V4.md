@@ -50,6 +50,8 @@ bash firmware/sim/build.sh
 PYTHONPATH=host .venv/bin/python -u host/hub_acceptance.py --minutes 30
 ```
 
+`--minutes 4` 是覆盖全部检查的最短时长（连续阶段第 7 轮才做 BLE 重连检查，约 190 秒）。2026-10-17 纯文字固件以 4 分钟通过，报告在 `backups/v4-text-ble-acceptance.json`。脚本在后台运行时 SIGINT 可能被忽略；中断后需手动删除测试记录并撤销「USB test peer」。
+
 脚本使用真实 Mac BLE 链路传送中文、换行、表情、64KiB 长文字，比较完整字节和摘要，验证 Mac 系统剪贴板、重启恢复、未提交上传、暂停、清空、收藏、图片拒绝、错误凭据、重放、篡改及连续运行。第二电脑通过 USB 测试凭据模拟，不代表 Windows 原生剪贴板或两台独立电脑同时连接 BLE 已通过。
 
 Windows 11 需另行实际验收：中文、换行、表情，Mac→Windows / Windows→Mac，过期任务不写入、收到后不再上传。物理触摸、滚动和真正拔电也需要实板检查，模拟点击和软件重启不能替代。

@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:gravity="center"
+    android:padding="4dp">
+    <Button
+        android:id="@+id/widget_sync"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:text="同步" />
+    <TextView
+        android:id="@+id/widget_status"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:textSize="11sp"
+        android:textColor="#FFFFFFFF"
+        android:shadowColor="#AA000000"
+        android:shadowRadius="2"
+        android:maxLines="1"
+        android:text="DeskClipboard" />
+</LinearLayout>

@@ -8,6 +8,8 @@
 #include "host/ble_hs.h"
 #include "host/util/util.h"
 #include "hub.h"
+#include "hub_store.h"
+#include "pair_crypto.h"
 #include "mbedtls/gcm.h"
 #include "mbedtls/md.h"
 #include "nimble/nimble_port.h"
@@ -41,6 +43,11 @@ typedef struct
     size_t expected, received;
     uint64_t rx, tx;
     SemaphoreHandle_t credits;
+    /* Phone pairing by code (P records, before any handshake). */
+    bool pairing;
+    int64_t pair_at;
+    pair_result_t pair;
+    char pair_id[37], pair_name[65], pair_platform[12];
 } connection_t;
 typedef struct
 {
@@ -56,6 +63,7 @@ static QueueHandle_t s_messages;
 static uint16_t s_notify;
 static uint8_t s_address_type;
 static int gap(struct ble_gap_event *event, void *arg);
+#define PAIR_SESSION_US 30000000LL
 
 static int find(uint16_t handle)
 {
@@ -264,6 +272,129 @@ static bool handshake(const message_t *m)
     memset(session, 0, sizeof(session));
     return valid && send_record(m, response, sizeof(response));
 }
+static void pair_reset(connection_t *c)
+{
+    c->pairing = false;
+    memset(&c->pair, 0, sizeof(c->pair));
+    c->pair_id[0] = c->pair_name[0] = c->pair_platform[0] = 0;
+}
+static int pair_rng(void *ctx, unsigned char *out, size_t len)
+{
+    (void)ctx;
+    esp_fill_random(out, len);
+    return 0;
+}
+static bool pair_error(const message_t *m, const char *error)
+{
+    uint8_t out[40] = {'P', 0xff};
+    size_t n = strlen(error);
+    if (n > sizeof(out) - 2)
+        n = sizeof(out) - 2;
+    memcpy(out + 2, error, n);
+    return send_record(m, out, n + 2);
+}
+/* SPAKE2 pairing (see pair_crypto.h / host/clipboard_agent/pake.py):
+ *   P01 device_id pA name platform -> P02 board_id pB
+ *   P03 cA                         -> P04 cB (peer stored) | PFF error
+ * Only one connection pairs at a time; a wrong cA counts against the code. */
+static bool pairing(const message_t *m)
+{
+    const uint8_t *d = m->data;
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    connection_t *c = &s_connections[m->slot];
+    bool authenticated = c->authenticated;
+    bool busy = false;
+    int64_t t = esp_timer_get_time();
+    for (int i = 0; i < CONNECTIONS; i++)
+        if (i != m->slot && s_connections[i].connected && s_connections[i].pairing &&
+            t - s_connections[i].pair_at < PAIR_SESSION_US)
+            busy = true;
+    xSemaphoreGive(s_lock);
+    if (authenticated || m->length < 2)
+        return false;
+    if (d[1] == 1)
+    {
+        if (busy)
+            return pair_error(m, "busy");
+        char code[7];
+        const char *err = hub_pair_code(code);
+        if (err)
+            return pair_error(m, err);
+        if (m->length < 2 + 36 + 65 + 2)
+            return pair_error(m, "invalid_pair_request");
+        size_t name_len = d[103];
+        if (104 + name_len + 1 > m->length || name_len > 64)
+            return pair_error(m, "invalid_pair_request");
+        size_t plat_len = d[104 + name_len];
+        if (105 + name_len + plat_len != m->length || plat_len >= 12)
+            return pair_error(m, "invalid_pair_request");
+        char id[37], name[65], platform[12];
+        memcpy(id, d + 2, 36);
+        id[36] = 0;
+        memcpy(name, d + 104, name_len);
+        name[name_len] = 0;
+        memcpy(platform, d + 105 + name_len, plat_len);
+        platform[plat_len] = 0;
+        if (!hub_valid_id(id) || strlen(name) != name_len || strcmp(platform, "android"))
+            return pair_error(m, "invalid_device");
+        uint8_t w[32];
+        pair_result_t result;
+        const char *board = hub_board_id();
+        int rc = pair_code_scalar(code, w);
+        memset(code, 0, sizeof(code));
+        if (!rc)
+            rc = pair_spake2_b(w, (const uint8_t *)id, 36, (const uint8_t *)board, strlen(board), d + 38, NULL,
+                               pair_rng, NULL, &result);
+        memset(w, 0, sizeof(w));
+        if (rc)
+            return pair_error(m, "invalid_pair_request");
+        uint8_t reply[3 + 64 + 65] = {'P', 2, (uint8_t)strlen(board)};
+        memcpy(reply + 3, board, reply[2]);
+        memcpy(reply + 3 + reply[2], result.pb, 65);
+        xSemaphoreTake(s_lock, portMAX_DELAY);
+        bool valid = current(m);
+        if (valid)
+        {
+            c->pairing = true;
+            c->pair_at = esp_timer_get_time();
+            c->pair = result;
+            memcpy(c->pair_id, id, sizeof(id));
+            memcpy(c->pair_name, name, sizeof(name));
+            memcpy(c->pair_platform, platform, sizeof(platform));
+        }
+        xSemaphoreGive(s_lock);
+        memset(&result, 0, sizeof(result));
+        return valid && send_record(m, reply, 3 + reply[2] + 65);
+    }
+    if (d[1] == 3)
+    {
+        xSemaphoreTake(s_lock, portMAX_DELAY);
+        bool active = c->pairing && esp_timer_get_time() - c->pair_at < PAIR_SESSION_US && current(m);
+        pair_result_t result = c->pair;
+        char id[37], name[65], platform[12];
+        memcpy(id, c->pair_id, sizeof(id));
+        memcpy(name, c->pair_name, sizeof(name));
+        memcpy(platform, c->pair_platform, sizeof(platform));
+        pair_reset(c);
+        xSemaphoreGive(s_lock);
+        if (!active)
+            return pair_error(m, "pairing_closed");
+        bool ok = m->length == 34 && pair_equal32(d + 2, result.ca);
+        const char *err = NULL;
+        if (!ok)
+        {
+            hub_pair_failed();
+            err = "bad_code";
+        }
+        else
+            err = hub_pair_add(id, name, platform, result.token);
+        uint8_t reply[34] = {'P', 4};
+        memcpy(reply + 2, result.cb, 32);
+        memset(&result, 0, sizeof(result));
+        return err ? pair_error(m, err) : send_record(m, reply, sizeof(reply));
+    }
+    return pair_error(m, "invalid_pair_request");
+}
 static uint8_t *json_response(cJSON *json, size_t *size)
 {
     char *text = cJSON_PrintUnformatted(json);
@@ -418,7 +549,7 @@ static void worker(void *arg)
         xSemaphoreGive(s_lock);
         if (valid)
         {
-            bool ok = m.data[0] == 'H' ? handshake(&m) : encrypted(&m);
+            bool ok = m.data[0] == 'H' ? handshake(&m) : m.data[0] == 'P' ? pairing(&m) : encrypted(&m);
             if (!ok)
                 ble_gap_terminate(handle, BLE_ERR_REM_USER_CONN_TERM);
         }
@@ -443,6 +574,7 @@ static int gap(struct ble_gap_event *e, void *arg)
                     c->epoch++;
                     c->token[0] = 0;
                     memset(c->key, 0, 32);
+                    pair_reset(c);
                     reset_input(c);
                     while (xSemaphoreTake(c->credits, 0) == pdTRUE)
                     {
@@ -470,6 +602,7 @@ static int gap(struct ble_gap_event *e, void *arg)
             memcpy(m.disconnected, c->token, 65);
             c->connected = false;
             c->authenticated = false;
+            pair_reset(c);
             reset_input(c);
             memset(c->key, 0, 32);
             xQueueSend(s_messages, &m, 0);

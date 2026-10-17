@@ -771,7 +771,7 @@ static void s_peer_buttons(lv_obj_t *box, const ui_peer_t *peers, size_t count, 
         lv_obj_center(label);
         if (!revoke && !s_peers[i].online) lv_obj_add_state(button, LV_STATE_DISABLED);
     }
-    if (!count) lv_label_set_text(lv_label_create(box), "No paired computers");
+    if (!count) lv_label_set_text(lv_label_create(box), "No paired devices");
     s_apply_asset(s_image_button(box, s_layer_clicked, NULL), CLIP_ASSET_CANCEL);
 }
 
@@ -785,10 +785,21 @@ void ui_show_targets(uint32_t id, uint8_t kind, uint8_t chip, const ui_peer_t *p
     lvgl_port_unlock();
 }
 
-void ui_show_peers(const ui_peer_t *peers, size_t count)
+void ui_show_peers(const ui_peer_t *peers, size_t count, const char *code)
 {
     lvgl_port_lock(0);
-    s_peer_buttons(s_hub_box(CLIP_ASSET_PAIR_TITLE), peers, count, true);
+    lv_obj_t *box = s_hub_box(CLIP_ASSET_PAIR_TITLE);
+    if (code) {
+        /* Phone pairing: enter this code in the Android app. */
+        s_apply_asset(lv_image_create(box), CLIP_ASSET_PAIR_CODE_TITLE);
+        lv_obj_t *digits = lv_label_create(box);
+        lv_label_set_text_fmt(digits, "%.3s %.3s", code, code + 3);
+        lv_obj_set_width(digits, 196);
+        lv_obj_set_style_text_align(digits, LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_set_style_text_font(digits, &lv_font_montserrat_28, 0);
+        lv_obj_set_style_text_letter_space(digits, 3, 0);
+    }
+    s_peer_buttons(box, peers, count, true);
     lvgl_port_unlock();
 }
 

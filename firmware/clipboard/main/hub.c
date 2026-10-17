@@ -41,6 +41,13 @@ static bool s_dirty;
 static _Atomic uint8_t s_notice;
 static _Atomic bool s_wake; /* screen_wake() outside s_lock (it takes the LVGL lock) */
 static int64_t s_restart_at;
+/* Phone pairing code (⋯ → 配对管理): 6 digits, valid with the pairing window,
+ * single use, closed after PAIR_MAX_FAILURES wrong confirmations. */
+#define PAIR_MAX_FAILURES 3
+static char s_pair_code[7];
+static int64_t s_code_until;
+static uint8_t s_code_failures;
+static bool s_show_peers;
 
 typedef struct
 {
@@ -221,7 +228,9 @@ static size_t ui_peers(ui_peer_t out[UI_MAX_PEERS])
         {
             peer_t* p = &s_peers[i];
             snprintf(out[n].id, 37, "%s", p->id);
-            snprintf(out[n].label, 48, "%s - %.6s", !strcmp(p->platform, "windows") ? "Windows" : "Mac", p->id);
+            snprintf(out[n].label, 48, "%s - %.6s",
+                     !strcmp(p->platform, "windows") ? "Windows" : !strcmp(p->platform, "android") ? "Android" : "Mac",
+                     p->id);
             out[n].online = online(p);
             n++;
         }
@@ -343,6 +352,94 @@ static void start_job(event_t* e)
     p->claimed = p->ready = false;
     s_notice = CLIP_ASSET_BUSY;
 }
+static bool code_open(void) { return s_pair_code[0] && now() < s_code_until; }
+static void close_code(void)
+{
+    memset(s_pair_code, 0, sizeof(s_pair_code));
+    s_code_until = 0;
+}
+/* Open the 2-minute pairing window (USB and phone code). Caller holds s_lock. */
+static void open_pairing(void)
+{
+    s_pair_until = now() + 120000;
+    uint32_t r;
+    do
+        r = esp_random();
+    while (r >= 4294000000u); /* 4294000000 = 4294 * 10^6: uniform 6 digits */
+    snprintf(s_pair_code, sizeof(s_pair_code), "%06lu", (unsigned long)(r % 1000000));
+    s_code_until = s_pair_until;
+    s_code_failures = 0;
+}
+static void show_peers(void)
+{
+    ui_peer_t peers[UI_MAX_PEERS];
+    size_t n = ui_peers(peers);
+    ui_show_peers(peers, n, code_open() ? s_pair_code : NULL);
+}
+const char* hub_pair_code(char code[7])
+{
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    bool open = code_open();
+    if (open)
+        memcpy(code, s_pair_code, 7);
+    xSemaphoreGive(s_lock);
+    return open ? NULL : "pairing_closed";
+}
+void hub_pair_failed(void)
+{
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    if (code_open() && ++s_code_failures >= PAIR_MAX_FAILURES)
+    {
+        close_code();
+        s_show_peers = true;
+    }
+    s_notice = CLIP_ASSET_PAIR_BAD_CODE;
+    xSemaphoreGive(s_lock);
+}
+const char* hub_pair_add(const char* id, const char* name, const char* platform, const char* token)
+{
+    const char* err = NULL;
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    peer_t* p = NULL;
+    if (!code_open())
+        err = "pairing_closed";
+    else if (!hub_valid_id(id) || strlen(name) > 64 || strlen(token) != 64 || strcmp(platform, "android"))
+        err = "invalid_device";
+    if (!err)
+    {
+        for (int i = 0; i < UI_MAX_PEERS; i++)
+            if (!strcmp(s_peers[i].id, id))
+                p = &s_peers[i];
+        for (int i = 0; !p && i < UI_MAX_PEERS; i++)
+            if (!s_peers[i].id[0])
+                p = &s_peers[i];
+        if (!p)
+            err = "peer_limit";
+    }
+    if (!err)
+    {
+        peer_t old = *p;
+        clear_job(p, false);
+        memset(p, 0, sizeof(*p));
+        snprintf(p->id, 37, "%s", id);
+        snprintf(p->name, 65, "%s", name);
+        snprintf(p->platform, 12, "%s", platform);
+        snprintf(p->token, 65, "%s", token);
+        if (!save_peers())
+        {
+            *p = old;
+            err = "storage_error";
+        }
+        else
+        {
+            close_code(); /* single use */
+            s_notice = CLIP_ASSET_PHONE_PAIRED;
+            s_show_peers = true;
+        }
+    }
+    xSemaphoreGive(s_lock);
+    return err;
+}
 static void handle_event(event_t* e)
 {
     const char* err = NULL;
@@ -397,9 +494,8 @@ static void handle_event(event_t* e)
         }
         else if (e->kind == CLIP_PAGE_PAIRING)
         {
-            s_pair_until = now() + 120000;
-            size_t n = ui_peers(peers);
-            ui_show_peers(peers, n);
+            open_pairing();
+            show_peers();
         }
         else if (e->kind == CLIP_PAGE_DEVICES)
         {
@@ -439,6 +535,11 @@ static void worker(void* arg)
         {
             render_store();
             s_dirty = false;
+        }
+        if (s_show_peers)
+        {
+            show_peers();
+            s_show_peers = false;
         }
         uint8_t notice = atomic_exchange(&s_notice, 0);
         bool restart = s_restart_at && now() >= s_restart_at;
@@ -531,6 +632,16 @@ static cJSON* request_locked(const cJSON* r, bool usb, const char* token)
     {
         s_pair_until = now() + 120000;
         return answer(NULL);
+    }
+    if (usb && !strcmp(op, "pair_code"))
+    {
+        /* Same as tapping ⋯ → 配对管理 (window + code on screen); the code is
+         * also returned so a USB-trusted tool can test phone pairing. */
+        open_pairing();
+        s_show_peers = true;
+        cJSON* o = answer(NULL);
+        cJSON_AddStringToObject(o, "code", s_pair_code);
+        return o;
     }
     if (usb && !strcmp(op, "control"))
     {

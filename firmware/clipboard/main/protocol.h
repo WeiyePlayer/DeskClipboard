@@ -79,4 +79,7 @@
 #define CLIP_ASSET_PASTED 33
 /* 息屏时间 labels, one per timeout option (30s, 1m, 2m, 5m, never). */
 #define CLIP_ASSET_SCREEN_BASE 34
-#define CLIP_ASSET_COUNT 39
+#define CLIP_ASSET_PAIR_CODE_TITLE 39 /* 手机配对码（2 分钟内有效） */
+#define CLIP_ASSET_PHONE_PAIRED 40
+#define CLIP_ASSET_PAIR_BAD_CODE 41
+#define CLIP_ASSET_COUNT 42

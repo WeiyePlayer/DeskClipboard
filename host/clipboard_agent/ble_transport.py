@@ -52,9 +52,12 @@ class BLETransport:
 
     async def _connect(self):
         from bleak import BleakClient, BleakScanner
-        name = "DeskClip-" + self.config["board_id"][-6:]
+        # config["pair"] = PairClient: pair by code first (board_id not known yet).
+        pairing = self.config.get("pair")
+        name = "DeskClip-" + self.config["board_id"][-6:] if not pairing else None
         device = await BleakScanner.find_device_by_filter(
-            lambda d, a: a.local_name == name and SERVICE in [s.lower() for s in a.service_uuids],
+            lambda d, a: ((a.local_name or "").startswith("DeskClip-") if name is None else a.local_name == name)
+            and SERVICE in [s.lower() for s in a.service_uuids],
             timeout=12, service_uuids=[SERVICE])
         if device is None:
             raise OSError("未找到已配对的开发板，请检查蓝牙和供电")
@@ -70,6 +73,15 @@ class BLETransport:
         # its CBPeripheral; other backends retain a bounded ATT request window.
         peripheral = getattr(getattr(self.client, "_backend", None), "_peripheral", None)
         self.can_write = getattr(peripheral, "canSendWriteWithoutResponse", None)
+        if pairing:
+            from clipboard_agent.pake import PairError
+            try:
+                confirm = pairing.confirm(await self._exchange(pairing.start()))
+                token = pairing.finish(await self._exchange(confirm))
+            except PairError as exc:
+                raise HubError(exc.code) from exc
+            self.config = {**{k: v for k, v in self.config.items() if k != "pair"},
+                           "board_id": pairing.board_id, "device_id": pairing.device_id, "token": token}
         handshake = Handshake(self.config["board_id"], self.config["device_id"], self.config["token"])
         self.cipher = handshake.finish(await self._exchange(handshake.request()))
 

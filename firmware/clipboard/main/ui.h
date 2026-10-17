@@ -25,7 +25,8 @@ typedef void (*ui_revoke_fn)(const char *peer);
 void ui_set_hub_handlers(ui_send_fn send, ui_revoke_fn revoke);
 void ui_show_targets(uint32_t id, uint8_t kind, uint8_t chip, const ui_peer_t *peers, size_t count);
 void ui_show_info(uint8_t title_asset, const char *text);
-void ui_show_peers(const ui_peer_t *peers, size_t count);
+/* code: 6-digit phone pairing code to display, or NULL. */
+void ui_show_peers(const ui_peer_t *peers, size_t count, const char *code);
 void ui_set_state(bool paused, bool empty, bool setup);
 void ui_reset_cards(void);
 /* Screen-off timeout entry in the settings menu: current index / advance + persist. */

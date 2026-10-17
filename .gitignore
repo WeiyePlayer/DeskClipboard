@@ -14,3 +14,17 @@ firmware/sim/build/
 # Vendor binaries (not redistributed)
 firmware/lcdwiki-es3c28p/*.bin
 assets/**/*.bin
+
+# Android build outputs and local SDK paths
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/.idea/
+android/*.iml
+android/app/*.iml
+android/captures/
+*.apk
+*.aab
+*.keystore
+*.jks

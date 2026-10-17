@@ -15,3 +15,7 @@ bool hub_peer_credential(const char *id, char token[65]);
 void hub_peer_disconnected(const char *token);
 const char *hub_board_id(void);
 bool hub_authorized(const char *token);
+/* Phone pairing by code (hub_ble.c drives the PAKE; hub.c owns the window). */
+const char *hub_pair_code(char code[7]);
+void hub_pair_failed(void);
+const char *hub_pair_add(const char *id, const char *name, const char *platform, const char *token);

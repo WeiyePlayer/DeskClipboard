@@ -15,6 +15,8 @@ CONFIG_PARTITION_TABLE_FILENAME="partitions.csv"
 # LVGL objects and buffers come from the system heap (PSRAM for large
 # blocks), not a fixed 64 KB pool that a single card image can exhaust.
 CONFIG_LV_USE_CLIB_MALLOC=y
+# Phone pairing code digits on the 配对管理 screen.
+CONFIG_LV_FONT_MONTSERRAT_28=y
 CONFIG_FATFS_LFN_HEAP=y
 CONFIG_FATFS_MAX_LFN=64
 CONFIG_FATFS_FS_LOCK=8

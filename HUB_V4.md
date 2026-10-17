@@ -43,6 +43,18 @@ USB 为每台电脑配置随机 256 位私有凭据。BLE 握手发送设备 UUI
 
 USB 使用协议 4，RPC 类型 `0x20 / 0x21`，正文开头为 uint32 关联号。公开本地操作只有状态、首次初始化、授权；管理和诊断操作需要电脑凭据。旧 V3 客户端被拒绝。
 
+## 手机配对码（SPAKE2）
+
+Android 没有 USB 配对，改用开发板显示的 6 位配对码。点「⋯ → 配对管理」（或 USB 调试命令 `pair_code`）打开 2 分钟窗口并生成均匀随机 6 位码；配对码一次有效，错误确认累计 3 次即作废，同一时刻只允许一个连接配对（30 秒会话）。
+
+为什么用 PAKE：「ECDH + HMAC(配对码)」能防被动嗅探，但中间人可以拿到对自己已知密钥的 HMAC 后离线穷举 10^6 个配对码。SPAKE2 每次在线尝试只能验证一个猜测，嗅探者得不到任何关于配对码或凭据的信息；3 次上限下猜中概率为 3×10⁻⁶。
+
+协议是 RFC 9382 的 SPAKE2-P256-SHA256-HKDF-HMAC（手机为 A 用 M，开发板为 B 用 N，RFC 给定的 M/N）：`w = SHA-512("deskclip-v4/pair-code\0" || 码) mod n`，身份 A = 设备 UUID，B = board_id，转录 TT、Ke/Ka、KcA/KcB、cA/cB 与 RFC 第 3.3/4 节一致。凭据 = `HKDF-SHA256(Ke, "deskclip-v4/credential")`，32 字节，与 USB 配对写入的每设备密钥同一形式；它从不在空中传输。之后的会话仍用原有 H 握手、AES-GCM 方向分离记录和序号防重放。
+
+记录（握手前，沿用 <u32 长度> 分片）：`P01 设备ID pA 名称 平台` → `P02 board_id pB` → `P03 cA` → `P04 cB`（开发板已保存对端）或 `PFF 错误`。开发板先校验 pA 在曲线上，标量乘法用 mbedtls_ecp_mul（带盲化），cA 用常量时间比较；只有 cA 正确才写 NVS `deskclip/peers`（平台 `android`，与原有 Mac/Windows 条目并存，格式不变）。
+
+实现：Python 参考 `host/clipboard_agent/pake.py`（对 RFC 附录 B 向量测试）；固件 `main/pair_crypto.c`（`firmware/sim/build_pair.sh` 用 ESP-IDF 的 mbedtls 在主机编译，`test_pair_crypto.py` 对 RFC 向量和 Python 参考逐字节核对）；Android `android/.../Spake2.kt`（JVM 单元测试使用 `host/gen_android_vectors.py` 生成的向量）。实板检查：`PYTHONPATH=host .venv/bin/python host/pair_code_check.py`（经 USB 取码，蓝牙配对临时测试设备、验证会话、单次有效、错码拒绝，最后撤销）。
+
 ## 验证
 
 ```sh

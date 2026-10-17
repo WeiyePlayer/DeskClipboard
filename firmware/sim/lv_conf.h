@@ -15,5 +15,6 @@
 #define LV_USE_ASSERT_MALLOC 1
 #define LV_USE_ASSERT_OBJ 1
 #define LV_FONT_MONTSERRAT_14 1
+#define LV_FONT_MONTSERRAT_28 1
 #define LV_USE_DRAW_SW 1
 #endif

@@ -267,6 +267,21 @@ int main(int argc, char **argv)
     run(100);
     check_all("after-menu-action");
     check_screen();
+    {
+        /* Phone pairing code layout (⋯ → 配对管理). */
+        ui_peer_t peers[3] = {{.id = "11111111-1111-4111-8111-111111111111", .label = "Mac - 111111"},
+                              {.id = "22222222-2222-4222-8222-222222222222", .label = "Windows - 222222"},
+                              {.id = "33333333-3333-4333-8333-333333333333", .label = "Android - 333333"}};
+        ui_show_peers(peers, 3, "042137");
+        run(100);
+        snapshot("pair-code");
+        lv_obj_t *layer = lv_obj_get_child(screen, -1), *box = lv_obj_get_child(layer, 0);
+        lv_area_t a;
+        lv_obj_get_coords(box, &a);
+        if (a.y1 < 0 || a.y2 > 320) { printf("pairing box off screen\n"); failures++; }
+        tap(10, 310);
+        printf("pairing code screen checked\n");
+    }
     printf("failures: %d\n", failures);
     return failures ? 1 : 0;
 }

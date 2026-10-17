@@ -10,6 +10,7 @@ import threading
 from clipboard_agent.ble_security import Handshake, Stream, SERVICE, WRITE, NOTIFY
 from clipboard_agent.hub_protocol import HubError
 from clipboard_agent.hub_transport import checked
+from clipboard_agent.retry_log import describe_error
 
 
 class BLETransport:
@@ -26,7 +27,7 @@ class BLETransport:
             self.close()
             if isinstance(exc, (HubError, OSError)):
                 raise
-            raise OSError("无法建立蓝牙连接：" + type(exc).__name__) from exc
+            raise OSError("无法建立蓝牙连接：" + describe_error(exc)) from exc
 
     def _run(self):
         asyncio.set_event_loop(self.loop)
@@ -124,7 +125,7 @@ class BLETransport:
             self.close()
             if isinstance(exc, (HubError, OSError)):
                 raise
-            raise OSError("蓝牙通信中断：" + type(exc).__name__) from exc
+            raise OSError("蓝牙通信中断：" + describe_error(exc)) from exc
         if response[:1] == b"J":
             return checked(json.loads(response[1:]))
         if response[:1] == b"B":

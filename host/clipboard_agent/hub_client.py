@@ -21,6 +21,7 @@ from clipboard_agent.hub_transport import upload
 from clipboard_agent.ble_transport import BLETransport
 from clipboard_agent.platform_clipboard import native_clipboard
 from clipboard_agent import autopaste
+from clipboard_agent.retry_log import RetryLog
 from clipboard_agent.instance_lock import AlreadyRunning, InstanceLock
 
 
@@ -173,18 +174,22 @@ class HubClient:
         else:
             self.log(autopaste.message(delivery.paste))
 
+    def connect(self):
+        return BLETransport(self.config)
+
     def progress(self):
         self.heartbeat()
 
     def network(self):
         active = None
         last_error = None
+        retry = RetryLog(self.log)
         while not self.stop.is_set():
             try:
                 if self.transport is None:
-                    self.transport = BLETransport(self.config)
+                    self.transport = self.connect()
                     self.heartbeat(force=True)
-                    self.log("蓝牙已连接开发板，身份验证通过")
+                    retry.success("蓝牙已连接开发板，身份验证通过")
                 self.heartbeat()
                 self.receive()
                 if active is None:
@@ -210,13 +215,15 @@ class HubClient:
                     return
                 self.stop.wait(2)
             except (OSError, TimeoutError, ValueError, KeyError) as exc:
-                self.log("连接中断，等待重连：" + type(exc).__name__)
+                connected = self.transport is not None
                 if self.transport:
                     self.transport.close()
                 self.transport = None
                 self.session = str(uuid.uuid4())
                 self.last_heartbeat = 0
-                self.stop.wait(2)
+                delay = retry.failure("蓝牙连接中断，正在重连" if connected else "连接失败，等待重试", exc)
+                # A link that was up gets one quick retry; repeated failures back off to 30 s.
+                self.stop.wait(1 if connected and retry.failures == 1 else delay)
 
     def run(self):
         self.log("蓝牙剪贴板客户端：" + self.config["name"] + " - " + self.config["device_id"][:6])

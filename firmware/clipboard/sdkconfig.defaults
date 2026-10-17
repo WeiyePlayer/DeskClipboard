@@ -12,3 +12,6 @@ CONFIG_SPIRAM_USE_MALLOC=y
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 CONFIG_PARTITION_TABLE_FILENAME="partitions.csv"
+# LVGL objects and buffers come from the system heap (PSRAM for large
+# blocks), not a fixed 64 KB pool that a single card image can exhaust.
+CONFIG_LV_USE_CLIB_MALLOC=y

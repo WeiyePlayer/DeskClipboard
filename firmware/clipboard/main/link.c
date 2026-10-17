@@ -5,6 +5,7 @@
 #include "esp_crc.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_system.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
@@ -269,8 +270,9 @@ static void s_task(void *arg)
     }
     while (true) {
         if (s_dtr && !s_host_seen && xTaskGetTickCount() >= s_next_hello) {
-            uint8_t version = CLIP_PROTOCOL_VERSION;
-            link_send(CLIP_HELLO, &version, 1);
+            /* version, then esp_reset_reason() so the host can log crashes. */
+            uint8_t hello[2] = {CLIP_PROTOCOL_VERSION, (uint8_t)esp_reset_reason()};
+            link_send(CLIP_HELLO, hello, sizeof(hello));
             s_next_hello = xTaskGetTickCount() + pdMS_TO_TICKS(500);
             s_hello_pending = false;
         }

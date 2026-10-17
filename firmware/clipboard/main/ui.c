@@ -98,23 +98,23 @@ static card_t *s_find(uint32_t id)
     return NULL;
 }
 
-static void s_style_image(lv_obj_t *image, lv_image_dsc_t *dsc)
+/*
+ * Point an lv_image straight at our PSRAM pixel copy. The previous version
+ * copied every card into a fresh lv_draw_buf on each (re)build. Those buffers
+ * came out of LVGL's 64 KB builtin pool and were never freed (the canvas
+ * destructor does not own them), so after one or two cards the pool was
+ * exhausted, the following lv_malloc in LVGL returned NULL and the board
+ * crashed and re-enumerated. The descriptor lives in card_t / asset_t, so it
+ * stays valid as long as the widget does. Setting NULL first forces LVGL to
+ * re-read the header when the same descriptor got new pixels.
+ */
+static void s_style_image(lv_obj_t *image, const lv_image_dsc_t *dsc)
 {
     if (image == NULL || dsc == NULL || dsc->data == NULL || dsc->header.w == 0) {
         return;
     }
-    uint32_t stride = ((uint32_t)dsc->header.w * 2u + 3u) & ~3u;
-    lv_draw_buf_t *draw = lv_draw_buf_create(dsc->header.w, dsc->header.h, LV_COLOR_FORMAT_RGB565, stride);
-    if (draw == NULL || draw->data == NULL) {
-        return;
-    }
-    uint32_t row = (uint32_t)dsc->header.w * 2u;
-    for (uint32_t y = 0; y < dsc->header.h; y++) {
-        memcpy((uint8_t *)draw->data + (size_t)y * draw->header.stride,
-               dsc->data + (size_t)y * row,
-               row);
-    }
-    lv_canvas_set_draw_buf(image, draw);
+    lv_image_set_src(image, NULL);
+    lv_image_set_src(image, dsc);
 }
 
 static void s_apply_asset(lv_obj_t *image, uint8_t asset_id)
@@ -270,7 +270,7 @@ static lv_obj_t *s_circle_button(lv_obj_t *parent, lv_event_cb_t callback)
 
 static lv_obj_t *s_image_button(lv_obj_t *parent, lv_event_cb_t callback, void *user)
 {
-    lv_obj_t *button = lv_canvas_create(parent);
+    lv_obj_t *button = lv_image_create(parent);
     lv_obj_add_flag(button, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(button, callback, LV_EVENT_CLICKED, user);
     return button;
@@ -332,8 +332,8 @@ void ui_init(void)
     lv_obj_set_style_bg_color(s_pill, lv_color_white(), 0);
     lv_obj_set_style_border_width(s_pill, 0, 0);
     lv_obj_align(s_pill, LV_ALIGN_LEFT_MID, 2, 0);
-    s_tab_clip = lv_canvas_create(segment);
-    s_tab_fav = lv_canvas_create(segment);
+    s_tab_clip = lv_image_create(segment);
+    s_tab_fav = lv_image_create(segment);
     lv_obj_add_flag(s_tab_clip, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_flag(s_tab_fav, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_align(s_tab_clip, LV_ALIGN_LEFT_MID, 10, 0);
@@ -371,7 +371,7 @@ void ui_init(void)
     lv_obj_set_flex_flow(confirm_box, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_flex_align(confirm_box, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_set_style_pad_row(confirm_box, 8, 0);
-    lv_canvas_create(confirm_box);
+    lv_image_create(confirm_box);
     lv_obj_t *row = lv_obj_create(confirm_box);
     lv_obj_set_size(row, 180, 36);
     lv_obj_set_style_border_width(row, 0, 0);
@@ -381,7 +381,7 @@ void ui_init(void)
     s_image_button(row, s_confirm_event, (void *)1);
     s_image_button(row, s_confirm_event, NULL);
 
-    s_toast = lv_canvas_create(screen);
+    s_toast = lv_image_create(screen);
     lv_obj_align(s_toast, LV_ALIGN_BOTTOM_MID, 0, -12);
     lv_obj_add_flag(s_toast, LV_OBJ_FLAG_HIDDEN);
     lv_obj_move_foreground(s_toast);
@@ -456,7 +456,7 @@ static lv_obj_t *s_build_card(card_t *card, lv_obj_t *parent)
     lv_obj_set_style_border_width(holder, 0, 0);
     lv_obj_set_style_pad_all(holder, 0, 0);
     lv_obj_set_user_data(holder, card);
-    lv_obj_t *image = lv_canvas_create(holder);
+    lv_obj_t *image = lv_image_create(holder);
     s_style_image(image, &card->dsc);
     for (uint8_t i = 0; i < card->region_count; i++) {
         lv_obj_t *hit = lv_obj_create(holder);
@@ -527,6 +527,10 @@ bool ui_put_card(uint32_t id, const uint8_t *pixels, uint16_t width, uint16_t he
         lvgl_port_unlock();
         return false;
     }
+    /* Widgets of a replaced card point at the old pixels and regions; drop
+     * them. The LIST_ORDER that follows every CARD_PUT rebuilds them. */
+    s_free_widget(&card->clip_obj);
+    s_free_widget(&card->fav_obj);
     free(card->pixels);
     card->used = true;
     card->id = id;

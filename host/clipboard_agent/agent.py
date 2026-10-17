@@ -65,38 +65,136 @@ def wait_for_port(explicit: str | None, timeout: float) -> str:
         time.sleep(0.2)
 
 
+_RESET_REASONS = {
+    1: "上电",
+    3: "软件重启",
+    4: "崩溃（panic）",
+    5: "中断看门狗",
+    6: "任务看门狗",
+    7: "看门狗",
+    9: "掉电",
+}
+
+
+def log(message: str) -> None:
+    print(f"{time.strftime('%H:%M:%S')} {message}", flush=True)
+
+
+def describe_hello(frame) -> str:
+    payload = frame.payload
+    text = f"开发板已连接，协议 {payload[0] if payload else '?'}"
+    if len(payload) >= 2:
+        reason = payload[1]
+        text += f"，上次重启：{_RESET_REASONS.get(reason, reason)}"
+    return text
+
+
 class Session:
-    def __init__(self, store: Store, link: DeviceLink) -> None:
+    """Keeps the board in step with the store.
+
+    A frame the board does not acknowledge never kills the agent: the session
+    marks the board as out of date and resends everything a moment later. If
+    the port disappears (board reset or unplugged) it reopens it when the
+    board comes back.
+    """
+
+    _RETRY_SECONDS = 2.0
+
+    def __init__(self, store: Store, link: DeviceLink, port: str | None = None) -> None:
         self.store = store
         self.link = link
+        self.port = port
         self.watcher = Watcher(store, MacPasteboard())
         self._prompted = False
+        self._stale = True
+        self._next_sync = 0.0
+        self._synced_at = 0.0
 
-    def sync(self) -> None:
-        for frame in chrome_frames():
+    def _send(self, frame: bytes) -> bool:
+        try:
             self.link.send(frame)
-        for frame in sync_frames(self.store):
-            self.link.send(frame)
+            return True
+        except (TimeoutError, ConnectionError, OSError) as exc:
+            log(f"开发板没有确认（{type(exc).__name__}：{exc}），稍后重新同步")
+            self._stale = True
+            # Let the board drop the half-received frame before we resend.
+            self._next_sync = time.time() + self._RETRY_SECONDS
+            return False
+
+    def _send_all(self, frames) -> bool:
+        for frame in frames:
+            if not self._send(frame):
+                return False
+        return True
+
+    def sync(self) -> bool:
+        started = time.time()
+        ok = self._send_all(chrome_frames()) and self._send_all(sync_frames(self.store))
+        if ok:
+            self._stale = False
+            self._synced_at = time.time()
+            log(f"已同步 {len(self.store.history())} 条，用时 {time.time() - started:.1f} 秒")
+        return ok
 
     def publish(self, clip: Clip) -> None:
-        self.link.send(card_frame(self.store, clip))
-        for frame in sync_frames(self.store)[-2:]:
-            self.link.send(frame)
+        if self._stale:
+            return  # the pending full sync will carry it
+        self._send(card_frame(self.store, clip)) and self._send_all(sync_frames(self.store)[-2:])
+
+    def _resync(self) -> None:
+        for frame in sync_frames(self.store):
+            if not self._send(frame):
+                return
+
+    def _reconnect(self) -> bool:
+        if self.port is None:
+            return False
+        self.link.close()
+        found = candidate_ports()
+        if not found:
+            return False
+        try:
+            self.link = DeviceLink(found[0])
+        except (OSError, ValueError) as exc:
+            log(f"打不开串口：{exc}")
+            return False
+        self.port = found[0]
+        hello = self.link.wait_hello(1.5)
+        log("重新连上开发板" if hello is None else "重新连上，" + describe_hello(hello))
+        self._stale = True
+        self._next_sync = 0.0
+        return True
 
     def run(self) -> int:
-        if self.link.wait_hello(1.5) is None:
-            print("没有等到 HELLO，直接同步", flush=True)
+        hello = self.link.wait_hello(1.5)
+        if hello is None:
+            log("没有等到 HELLO，直接同步")
         else:
-            print("开发板已连接", flush=True)
+            log(describe_hello(hello))
         self.sync()
+        lost_logged = False
         while True:
             try:
                 self._drain_pasteboard()
+                if not self.link.alive:
+                    if not lost_logged:
+                        log("开发板串口断开，等待重新连接")
+                        lost_logged = True
+                    if not self._reconnect():
+                        time.sleep(0.5)
+                        continue
+                    lost_logged = False
+                if self._stale and time.time() >= self._next_sync:
+                    self.sync()
                 event = self.link.next_event(0.3)
                 if event is None:
                     continue
                 if event.type == HELLO:
-                    self.sync()
+                    # The board repeats HELLO every 0.5 s until our first frame
+                    # lands; one that crossed a sync we just finished is stale.
+                    if time.time() - self._synced_at > 2.0:
+                        log(describe_hello(event))
+                        self.sync()
                 elif event.type == TAP:
                     self._tap(*decode_tap(event.payload))
                 elif event.type == MENU:
@@ -108,6 +206,11 @@ class Session:
             except KeyboardInterrupt:
                 print("\n已停止")
                 return 0
+            except Exception as exc:  # keep the agent alive; resync next round
+                log(f"出错：{type(exc).__name__}：{exc}")
+                self._stale = True
+                self._next_sync = time.time() + self._RETRY_SECONDS
+                time.sleep(0.5)
 
     def _drain_pasteboard(self) -> None:
         clip = self.watcher.poll()
@@ -141,12 +244,9 @@ class Session:
             restore_after=0.5,
         )
         self._prompted = True
-        print(result.message, flush=True)
+        log(result.message)
         toast = "已粘贴" if result.code == "ok" else _toast_for(result.code)
-        try:
-            self.link.send(toast_frame(toast))
-        except TimeoutError:
-            print("提示没有送到开发板", file=sys.stderr)
+        self._send(toast_frame(toast))
 
     def _menu(self, clip_id: int, action: int) -> None:
         if action == MENU_FAVORITE:
@@ -157,14 +257,12 @@ class Session:
             self.store.delete(clip_id)
         else:
             return
-        for frame in sync_frames(self.store):
-            self.link.send(frame)
+        self._resync()
 
     def _page(self, action: int) -> None:
         if action == PAGE_CLEAR:
             self.store.clear_history()
-            for frame in sync_frames(self.store):
-                self.link.send(frame)
+            self._resync()
         elif action == PAGE_PAUSE:
             self.watcher.paused = True
         elif action == PAGE_RESUME:
@@ -281,7 +379,7 @@ def main(argv: list[str] | None = None) -> int:
             print("开发板正在进入下载模式")
             return 0
         store = Store(APP_SUPPORT)
-        return Session(store, link).run()
+        return Session(store, link, port).run()
     finally:
         link.close()
 

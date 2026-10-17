@@ -33,6 +33,7 @@ class DeviceLink:
         self._acks: queue.Queue[Frame] = queue.Queue()
         self._lock = threading.Lock()
         self._closed = False
+        self._lost = False
         self._thread = threading.Thread(target=self._read_loop, daemon=True)
         self._thread.start()
 
@@ -40,8 +41,15 @@ class DeviceLink:
         self._closed = True
         self._serial.close()
 
+    @property
+    def alive(self) -> bool:
+        """False once the port vanished (board reset or unplugged)."""
+        return not self._closed and not self._lost and self._thread.is_alive()
+
     def send(self, frame: bytes, timeout: float = 3) -> None:
         for _ in range(2):
+            if not self.alive:
+                raise ConnectionError("开发板串口已断开")
             self._drop_stale_acks()
             with self._lock:
                 self._serial.write(frame)
@@ -91,7 +99,8 @@ class DeviceLink:
                 # arrived, delaying every 10-byte ACK by 200 ms. Take what is
                 # there, or block for a single byte.
                 chunk = self._serial.read(self._serial.in_waiting or 1)
-            except serial.SerialException:
+            except (serial.SerialException, OSError):
+                self._lost = True
                 return
             if not chunk:
                 continue

@@ -20,12 +20,20 @@ from clipboard_agent.hub_transport import upload
 from clipboard_agent.ble_transport import BLETransport
 from clipboard_agent.platform_clipboard import native_clipboard
 from clipboard_agent import autopaste
+from clipboard_agent.instance_lock import AlreadyRunning, InstanceLock
 
 
 def support_dir() -> Path:
     if sys.platform == "win32":
         return Path(os.environ.get("LOCALAPPDATA", Path.home())) / "DeskClipboard"
     return Path.home() / "Library/Application Support/DeskClipboard"
+
+
+def log_path() -> Path:
+    """Where the autostart installers send the background client's log."""
+    if sys.platform == "win32":
+        return support_dir() / "client.log"
+    return Path.home() / "Library/Logs/DeskClipboard/client.log"
 
 
 def load_config(path: Path) -> dict:
@@ -309,7 +317,14 @@ def main(argv=None):
     parser.add_argument("--migrate", action="store_true")
     parser.add_argument("--no-auto-paste", action="store_true",
                         help="收到内容后只更新剪贴板，不自动按 Command-V / Ctrl-V")
+    parser.add_argument("--wait-for-lock", action="store_true",
+                        help="已有客户端运行时等待它退出再接管（开机自启使用）")
+    parser.add_argument("--log-file", type=Path, help="把日志追加写入该文件（Windows 后台运行使用）")
     args = parser.parse_args(argv)
+    if args.log_file:
+        args.log_file.parent.mkdir(parents=True, exist_ok=True)
+        stream = open(args.log_file, "a", encoding="utf-8", buffering=1)
+        sys.stdout = sys.stderr = stream
     if args.setup or args.setup_ui or args.pair:
         from clipboard_agent.hub_setup import setup
         return setup(args)
@@ -325,7 +340,18 @@ def main(argv=None):
             transport.close()
         return 0
     enabled = not args.no_auto_paste and config.get("auto_paste", True) is not False
-    HubClient(config, paster=autopaste.native_paster(enabled)).run()
+    lock = InstanceLock(args.config.parent / "client.lock")
+    try:
+        lock.acquire(wait=args.wait_for_lock, on_wait=lambda pid: print(
+            time.strftime("%H:%M:%S"), f"已有客户端在运行（PID {pid}），等待它退出后接管", flush=True))
+    except AlreadyRunning as exc:
+        print(f"已有 DeskClipboard 客户端在运行（PID {exc.pid}），本次不再启动。"
+              "如已安装开机自启，它就在后台运行；日志见 " + str(log_path()), flush=True)
+        return 0
+    try:
+        HubClient(config, paster=autopaste.native_paster(enabled)).run()
+    finally:
+        lock.release()
     return 0
 
 

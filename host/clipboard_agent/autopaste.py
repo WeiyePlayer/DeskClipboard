@@ -6,6 +6,7 @@ MacKeys / WindowsKeys touch the OS. Outcomes go back to the board in the ACK
 """
 from __future__ import annotations
 
+import os
 import sys
 import time
 
@@ -20,7 +21,7 @@ MESSAGES = {
     "darwin": {
         PASTED: "已在当前窗口粘贴（Command-V）",
         ACCESSIBILITY: ("已写入剪贴板，但未自动粘贴：辅助功能未授权。请到「系统设置 → 隐私与安全性 → 辅助功能」"
-                        "允许运行本客户端的应用（终端），然后重启客户端。现在可手动按 Command-V。"),
+                        "打开「{app}」，然后重启客户端。现在可手动按 Command-V。"),
         SECURE_INPUT: "已写入剪贴板，但当前窗口处于安全输入（如密码框），系统拦截了模拟按键。请手动按 Command-V。",
         BLOCKED: "已写入剪贴板，但模拟 Command-V 失败。请手动按 Command-V。",
     },
@@ -34,9 +35,31 @@ MESSAGES = {
 }
 
 
+def background_launch() -> bool:
+    """True under the LaunchAgent / logon task (set by the installers)."""
+    return os.environ.get("DESKCLIP_BACKGROUND") == "1"
+
+
+def mac_python_app() -> str:
+    """The bundle macOS charges Accessibility to when launchd starts the client.
+
+    Framework Pythons (Homebrew, python.org) re-exec into Resources/Python.app,
+    so that app, not .venv/bin/python, is what has to be allowed.
+    """
+    app = os.path.join(os.path.realpath(sys.base_prefix), "Resources", "Python.app")
+    return app if os.path.isdir(app) else os.path.realpath(sys.executable)
+
+
+def responsible_app() -> str:
+    if background_launch():
+        return "Python（" + mac_python_app() + "）"
+    return "终端（Terminal，或你运行客户端所用的应用）"
+
+
 def message(outcome: str, platform: str | None = None) -> str:
     table = MESSAGES.get(platform or sys.platform, MESSAGES["darwin"])
-    return table.get(outcome, "已更新本机剪贴板")
+    text = table.get(outcome, "已更新本机剪贴板")
+    return text.replace("{app}", responsible_app()) if "{app}" in text else text
 
 
 class AutoPaster:

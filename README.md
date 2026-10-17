@@ -25,11 +25,22 @@ macOS，在项目目录运行：
 
 已有环境也可直接运行 `PYTHONPATH=host .venv/bin/python -m clipboard_agent`。
 
+### 开机自启（推荐，一次性设置）
+
+配对完成后，不必每次在终端启动客户端：
+
+- **macOS**：在访达中双击 `scripts/install-mac-autostart.command`。它安装 LaunchAgent `~/Library/LaunchAgents/com.weiye.deskclipboard.plist`：登录后在后台运行，崩溃后 10 秒内自动重启，日志在 `~/Library/Logs/DeskClipboard/client.log`。
+  - **授权对象会变**：后台运行时 macOS 把「辅助功能」和「蓝牙」权限记在 **Python.app** 上（Homebrew 为 `/opt/homebrew/Cellar/python@3.11/<版本>/Frameworks/Python.framework/Versions/3.11/Resources/Python.app`，安装脚本会打印准确路径并在访达中选中它），而不是终端。在「系统设置 → 隐私与安全性 → 辅助功能」打开「Python」（没有就点「+」把 Python.app 拖进去），首次出现蓝牙提示时选允许，然后运行 `launchctl kickstart -k gui/$UID/com.weiye.deskclipboard` 重启后台客户端。`brew upgrade` 升级 Python 后需重新授权。
+  - 卸载：双击 `scripts/uninstall-mac-autostart.command`。
+- **Windows**：`powershell -ExecutionPolicy Bypass -File .\scripts\install-windows-autostart.ps1`。它注册「登录时」计划任务 `DeskClipboard`，用 `pythonw` 无窗口运行，失败后每分钟重试，日志在 `%LOCALAPPDATA%\DeskClipboard\client.log`。卸载：`uninstall-windows-autostart.ps1`。（尚未在真实 Windows 上验证。）
+
+同一用户只运行一个客户端（`client.lock` 文件锁）。在终端里手动启动时如果后台已有客户端，会提示并直接退出；后台客户端用 `--wait-for-lock`，若终端里已开着客户端，会等它退出再接管。
+
 ### 自动粘贴
 
 默认开启。收到内容后先写入剪贴板，再向当前前台窗口发送粘贴快捷键；粘贴后剪贴板保留收到的内容（不恢复之前的剪贴板），可再次手动粘贴，且不会被重新上传或打乱开发板顺序。关闭方法：启动时加 `--no-auto-paste`，或在 `client-v4.json` 写入 `"auto_paste": false`，此时只更新剪贴板。
 
-- macOS 需要辅助功能权限：首次启动会弹出系统提示。到「系统设置 → 隐私与安全性 → 辅助功能」打开运行客户端的应用（终端），然后重启客户端。未授权或当前处于安全输入（密码框）时，内容仍留在剪贴板，开发板提示「已写入剪贴板，请开启辅助功能」或「请手动粘贴」，客户端日志说明原因。
+- macOS 需要辅助功能权限：首次启动会弹出系统提示。到「系统设置 → 隐私与安全性 → 辅助功能」打开运行客户端的应用（终端里手动运行时是「终端」，开机自启时是 Python.app，见上文），然后重启客户端。未授权或当前处于安全输入（密码框）时，内容仍留在剪贴板，开发板提示「已写入剪贴板，请开启辅助功能」或「请手动粘贴」，客户端日志说明原因。
 - Windows 使用 SendInput。锁屏/UAC 安全桌面或目标窗口以管理员身份运行时系统会拦截按键，内容仍在剪贴板，请手动 Ctrl-V。
 - 发送期限不变：超过两秒写入租约的任务既不写入也不粘贴。
 

@@ -1,5 +1,7 @@
 """Auto-paste decisions with fake key backends: no real keystroke is ever sent."""
+import tempfile
 import time
+from pathlib import Path
 import unittest
 import uuid
 
@@ -155,7 +157,8 @@ class ClientTest(unittest.TestCase):
         try:
             for argv, cfg, want in (([], {}, True), (["--no-auto-paste"], {}, False), ([], {"auto_paste": False}, False)):
                 hc.load_config = lambda p, cfg=cfg: dict(cfg, device_id="d", board_id="b", token="t", name="Mac")
-                main(argv)
+                with tempfile.TemporaryDirectory() as tmp:  # never the user's real lock
+                    main(argv + ["--config", str(Path(tmp) / "client-v4.json")])
                 self.assertEqual(seen["enabled"], want)
             self.assertTrue(autopaste.native_paster(True).enabled or __import__("sys").platform not in ("darwin", "win32"))
         finally:

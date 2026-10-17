@@ -84,5 +84,7 @@ def sync_frames(store: Store) -> list[bytes]:
 
 
 def toast_frame(text: str, duration_ms: int = 1200) -> bytes:
-    raster = render_label(text, (32, 32, 32), 14)
+    # Dark pill with white text. The label default is near-black text, which
+    # on this background rendered the toast as a solid black block.
+    raster = render_label(text, (32, 32, 32), 14, foreground=(255, 255, 255))
     return encode_toast(duration_ms, raster.width, raster.height, raster.rgb565)

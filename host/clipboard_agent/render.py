@@ -73,11 +73,16 @@ def render_image_card(png: bytes, pixel_width: int, pixel_height: int) -> Raster
     return Raster(CARD_WIDTH, height, canvas.rgb565(), regions)
 
 
-def render_label(text: str, background: tuple[int, int, int], size: int = 14) -> Raster:
+def render_label(
+    text: str,
+    background: tuple[int, int, int],
+    size: int = 14,
+    foreground: tuple[int, int, int] = (20, 20, 20),
+) -> Raster:
     width = min(200, 16 + _text_width(text, size))
     height = size + 10
     canvas = _Canvas(width, height, background)
-    canvas.text(text, 8, 4, width - 16, height - 6, size, (20, 20, 20))
+    canvas.text(text, 8, 4, width - 16, height - 6, size, foreground)
     return Raster(width, height, canvas.rgb565())
 
 

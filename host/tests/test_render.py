@@ -44,6 +44,20 @@ class RenderTest(unittest.TestCase):
         self.assertLess((blue >> 11) & 31, 8)
         self.assertGreater((mirrored >> 11) & 31, 24)
 
+    def test_toast_text_is_visible(self):
+        import struct
+
+        from clipboard_agent.catalog import toast_frame
+        from clipboard_agent.frames import Decoder
+
+        frames, _ = Decoder().feed(toast_frame("已粘贴"))
+        payload = frames[0].payload
+        pixels = payload[6:]
+        reds = {(pixels[i] | (pixels[i + 1] << 8)) >> 11 for i in range(0, len(pixels), 2)}
+        # Background is dark; the glyphs must be clearly lighter.
+        self.assertLess(min(reds), 8)
+        self.assertGreater(max(reds), 24)
+
 
 if __name__ == "__main__":
     unittest.main()

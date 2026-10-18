@@ -59,6 +59,7 @@ typedef struct
 } message_t;
 static connection_t s_connections[CONNECTIONS];
 static SemaphoreHandle_t s_lock;
+static _Atomic uint8_t s_ble_stage; /* diagnostics, see guard.h */
 static QueueHandle_t s_messages;
 static uint16_t s_notify;
 static uint8_t s_address_type;
@@ -536,8 +537,10 @@ static void worker(void *arg)
     message_t m;
     for (;;)
     {
+        s_ble_stage = 0;
         if (xQueueReceive(s_messages, &m, portMAX_DELAY) != pdTRUE)
             continue;
+        s_ble_stage = 1;
         if (m.disconnected[0])
         {
             hub_peer_disconnected(m.disconnected);
@@ -549,13 +552,17 @@ static void worker(void *arg)
         xSemaphoreGive(s_lock);
         if (valid)
         {
+            s_ble_stage = m.data[0] == 'H' ? 2 : m.data[0] == 'P' ? 3 : 4;
             bool ok = m.data[0] == 'H' ? handshake(&m) : m.data[0] == 'P' ? pairing(&m) : encrypted(&m);
+            s_ble_stage = 5;
             if (!ok)
                 ble_gap_terminate(handle, BLE_ERR_REM_USER_CONN_TERM);
         }
         free(m.data);
     }
 }
+TaskHandle_t hub_ble_lock_holder(void) { return s_lock ? xSemaphoreGetMutexHolder(s_lock) : NULL; }
+uint8_t hub_ble_stage(void) { return s_ble_stage; }
 static int gap(struct ble_gap_event *e, void *arg)
 {
     (void)arg;

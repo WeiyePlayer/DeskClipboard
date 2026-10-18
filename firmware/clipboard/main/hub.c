@@ -41,6 +41,8 @@ static int64_t s_upload_at;
 static int64_t s_pair_until;
 static bool s_dirty;
 static _Atomic uint8_t s_notice;
+static _Atomic uint8_t s_worker_stage; /* diagnostics, see guard.h */
+static _Atomic uint32_t s_last_event, s_last_event_ms;
 static _Atomic bool s_wake; /* screen_wake() outside s_lock (it takes the LVGL lock) */
 static int64_t s_restart_at;
 /* Phone pairing code (⋯ → 配对管理): 6 digits, valid with the pairing window,
@@ -287,6 +289,8 @@ static void render_store(void)
 }
 static void post(uint8_t action, uint32_t id, uint8_t kind, uint8_t chip, const char* peer)
 {
+    s_last_event = (uint32_t)action << 24 | (uint32_t)kind << 16 | (uint32_t)chip << 8 | (id & 0xff);
+    s_last_event_ms = (uint32_t)now();
     event_t e = { .action = action, .id = id, .kind = kind, .chip = chip };
     if (peer)
         snprintf(e.peer, sizeof(e.peer), "%s", peer);
@@ -521,10 +525,14 @@ static void worker(void* arg)
     event_t e;
     for (;;)
     {
+        s_worker_stage = 0;
         bool event = xQueueReceive(s_events, &e, pdMS_TO_TICKS(100)) == pdTRUE;
+        s_worker_stage = 1;
         xSemaphoreTake(s_lock, portMAX_DELAY);
+        s_worker_stage = event ? 10 + e.action : 2;
         if (event)
             handle_event(&e);
+        s_worker_stage = 3;
         for (int i = 0; i < UI_MAX_PEERS; i++)
         {
             peer_t* p = &s_peers[i];
@@ -535,24 +543,35 @@ static void worker(void* arg)
             hub_store_abort(&s_store);
         if (s_dirty)
         {
+            s_worker_stage = 4;
             render_store();
             s_dirty = false;
         }
         if (s_show_peers)
         {
+            s_worker_stage = 5;
             show_peers();
             s_show_peers = false;
         }
         uint8_t notice = atomic_exchange(&s_notice, 0);
         bool restart = s_restart_at && now() >= s_restart_at;
         xSemaphoreGive(s_lock);
+        s_worker_stage = 6;
         if (notice)
             hub_notice(notice);
+        s_worker_stage = 7;
         if (atomic_exchange(&s_wake, false))
             screen_wake();
         if (restart)
             esp_restart();
     }
+}
+TaskHandle_t hub_lock_holder(void) { return s_lock ? xSemaphoreGetMutexHolder(s_lock) : NULL; }
+uint8_t hub_worker_stage(void) { return s_worker_stage; }
+uint32_t hub_last_event(uint32_t* at_ms)
+{
+    *at_ms = s_last_event_ms;
+    return s_last_event;
 }
 static cJSON* status(bool usb)
 {
@@ -585,6 +604,8 @@ static cJSON* request_locked(const cJSON* r, bool usb, const char* token)
 {
     const char* op = str(r, "op");
     peer_t* peer = authenticate(token);
+    if (usb && !strcmp(op, "diag"))
+        return guard_diag_json();
     if (usb && !strcmp(op, "status"))
         return status(true);
     if (usb && !strcmp(op, "initialize"))

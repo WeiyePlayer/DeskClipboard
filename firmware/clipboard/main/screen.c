@@ -29,6 +29,7 @@ static uint8_t s_index = SCREEN_TIMEOUT_DEFAULT;
 static uint8_t s_level; /* 0 awake, 1 dim, 2 off */
 static bool s_ready, s_shield_pressed;
 static lv_obj_t *s_shield;
+static uint32_t s_wake_ms; /* last wake touch, diagnostics */
 static esp_lcd_panel_handle_t s_panel;
 
 static void backlight(uint32_t duty)
@@ -71,6 +72,7 @@ static void shield_event(lv_event_t *e)
     lv_event_code_t code = lv_event_get_code(e);
     if (code == LV_EVENT_PRESSED) {
         s_shield_pressed = true;
+        s_wake_ms = lv_tick_get();
         set_level(0); /* light up immediately; this touch does nothing else */
     } else if (code == LV_EVENT_RELEASED || code == LV_EVENT_PRESS_LOST) {
         s_shield_pressed = false;
@@ -123,6 +125,7 @@ void screen_wake(void)
 
 uint8_t screen_timeout_index(void) { return s_index; }
 uint8_t screen_level(void) { return s_level; }
+uint32_t screen_last_wake_ms(void) { return s_wake_ms; }
 
 uint8_t screen_cycle_timeout(void)
 {

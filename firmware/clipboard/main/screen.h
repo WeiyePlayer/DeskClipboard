@@ -13,3 +13,5 @@ void screen_wake(void);                      /* any task: new item etc. */
 uint8_t screen_timeout_index(void);
 uint8_t screen_cycle_timeout(void);          /* LVGL context: next option, persisted */
 uint8_t screen_level(void);                  /* 0 awake, 1 dim, 2 off (tests/diagnostics) */
+/* lv_tick of the last wake touch (diagnostics). */
+uint32_t screen_last_wake_ms(void);

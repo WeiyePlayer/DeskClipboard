@@ -1,5 +1,6 @@
 #include "board.h"
 #include "screen.h"
+#include "guard.h"
 
 #include "driver/gpio.h"
 #include "driver/i2c_master.h"
@@ -18,6 +19,51 @@ static const char *TAG = "board";
 #define LCD_V 320
 
 static i2c_master_bus_handle_t s_i2c;
+static i2c_master_dev_handle_t s_touch_dev;
+static lv_display_t *s_disp;
+
+lv_display_t *board_display(void) { return s_disp; }
+
+/* Polled FT6336 read with a bounded I2C timeout. esp_lcd's I2C panel IO (and
+ * so esp_lvgl_port's touch indev) waits forever (-1) for a transfer; a wedged
+ * touch controller or bus then blocks the LVGL task while it holds the LVGL
+ * lock, which froze the whole board (UI, hub worker, BLE and USB requests). */
+#define TOUCH_ADDR 0x38
+#define TOUCH_TIMEOUT_MS 50
+static void touch_read(lv_indev_t *indev, lv_indev_data_t *data)
+{
+    (void)indev;
+    static lv_point_t last;
+    static uint8_t failures;
+    uint8_t reg = 0x02, buf[5]; /* TD_STATUS, P1_XH, P1_XL, P1_YH, P1_YL */
+    guard_stage(GUARD_TOUCH);
+    esp_err_t err = s_touch_dev ? i2c_master_transmit_receive(s_touch_dev, &reg, 1, buf, sizeof(buf), TOUCH_TIMEOUT_MS)
+                                : ESP_ERR_INVALID_STATE;
+    guard_stage(GUARD_IDLE);
+    data->point = last;
+    data->state = LV_INDEV_STATE_RELEASED;
+    if (err != ESP_OK) {
+        if (++failures >= 5) { /* ~5 reads: recover the bus, keep the UI running */
+            failures = 0;
+            ESP_LOGW(TAG, "touch read failed (%s), resetting I2C bus", esp_err_to_name(err));
+            i2c_master_bus_reset(s_i2c);
+        }
+        return;
+    }
+    failures = 0;
+    uint8_t points = buf[0] & 0x0f;
+    uint8_t event = buf[1] >> 6; /* 0 down, 1 up, 2 contact */
+    if (points == 0 || points > 2 || event == 1)
+        return;
+    int32_t x = ((buf[1] & 0x0f) << 8) | buf[2];
+    int32_t y = ((buf[3] & 0x0f) << 8) | buf[4];
+    if (x >= LCD_H) x = LCD_H - 1;
+    if (y >= LCD_V) y = LCD_V - 1;
+    last.x = x;
+    last.y = y;
+    data->point = last;
+    data->state = LV_INDEV_STATE_PRESSED;
+}
 
 esp_err_t board_display_start(void)
 {
@@ -86,6 +132,7 @@ esp_err_t board_display_start(void)
     if (disp == NULL) {
         return ESP_FAIL;
     }
+    s_disp = disp;
 
     const i2c_master_bus_config_t i2c_bus = {
         .clk_source = I2C_CLK_SRC_DEFAULT,
@@ -105,7 +152,7 @@ esp_err_t board_display_start(void)
         .x_max = LCD_H,
         .y_max = LCD_V,
         .rst_gpio_num = GPIO_NUM_18,
-        .int_gpio_num = GPIO_NUM_17,
+        .int_gpio_num = GPIO_NUM_NC, /* polled by touch_read() */
         .levels = {
             .reset = 0,
             .interrupt = 0,
@@ -118,13 +165,22 @@ esp_err_t board_display_start(void)
     };
     esp_lcd_touch_handle_t touch = NULL;
     ESP_ERROR_CHECK(esp_lcd_touch_new_i2c_ft5x06(touch_io, &touch_config, &touch));
-    const lvgl_port_touch_cfg_t touch_port = {
-        .disp = disp,
-        .handle = touch,
+    (void)touch; /* reset + configuration only; reads go through touch_read() */
+    const i2c_device_config_t touch_dev = {
+        .dev_addr_length = I2C_ADDR_BIT_LEN_7,
+        .device_address = TOUCH_ADDR,
+        .scl_speed_hz = 400000,
     };
-    if (lvgl_port_add_touch(&touch_port) == NULL) {
-        ESP_LOGW(TAG, "touch indev failed");
+    if (i2c_master_bus_add_device(s_i2c, &touch_dev, &s_touch_dev) != ESP_OK) {
+        s_touch_dev = NULL;
+        ESP_LOGW(TAG, "touch device failed");
     }
+    lvgl_port_lock(0);
+    lv_indev_t *indev = lv_indev_create();
+    lv_indev_set_type(indev, LV_INDEV_TYPE_POINTER);
+    lv_indev_set_read_cb(indev, touch_read);
+    lv_indev_set_display(indev, disp);
+    lvgl_port_unlock();
     ESP_LOGI(TAG, "display ready");
     return ESP_OK;
 }

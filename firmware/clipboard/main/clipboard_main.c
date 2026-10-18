@@ -13,6 +13,7 @@
 #include "ui.h"
 #include "hub.h"
 #include "screen.h"
+#include "guard.h"
 
 static const char *TAG = "clipboard";
 
@@ -125,6 +126,7 @@ void app_main(void)
     ui_init();
     hub_start(); /* initialises NVS */
     screen_start();
+    guard_start(board_display()); /* restarts the board if the UI task stalls */
     ui_set_screen_handlers(screen_timeout_index, screen_cycle_timeout);
     link_start();
     usb_init();

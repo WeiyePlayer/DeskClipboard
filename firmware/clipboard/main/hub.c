@@ -1,4 +1,5 @@
 #include "hub.h"
+#include "guard.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_mac.h"
@@ -564,6 +565,9 @@ static cJSON* status(bool usb)
     cJSON_AddNumberToObject(o, "records", cJSON_GetArraySize(hub_store_records(&s_store)));
     cJSON_AddNumberToObject(o, "uptime_ms", now());
     cJSON_AddNumberToObject(o, "reset_reason", esp_reset_reason());
+    /* Last UI-stall restart: stage + 1 (1 idle/timers, 2 touch, 3 render, 4 flush wait), 0 = none. */
+    cJSON_AddNumberToObject(o, "last_stall_stage", guard_last_stage());
+    cJSON_AddNumberToObject(o, "last_stall_uptime_s", guard_last_uptime_s());
     cJSON_AddNumberToObject(o, "free_psram", heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
     cJSON_AddStringToObject(o, "transport", "ble");
     cJSON_AddStringToObject(o, "content", "text_only");

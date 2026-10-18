@@ -1,5 +1,6 @@
 #include "hub.h"
 #include "guard.h"
+#include "board.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_mac.h"
@@ -569,6 +570,11 @@ static cJSON* status(bool usb)
     cJSON_AddNumberToObject(o, "last_stall_stage", guard_last_stage());
     cJSON_AddNumberToObject(o, "last_stall_uptime_s", guard_last_uptime_s());
     cJSON_AddNumberToObject(o, "free_psram", heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+    cJSON_AddNumberToObject(o, "free_internal", heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+    cJSON_AddNumberToObject(o, "min_free_internal", heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL));
+    cJSON_AddNumberToObject(o, "largest_dma", heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA));
+    cJSON_AddNumberToObject(o, "flush_errors", board_flush_errors());
+    cJSON_AddNumberToObject(o, "flush_timeouts", board_flush_timeouts());
     cJSON_AddStringToObject(o, "transport", "ble");
     cJSON_AddStringToObject(o, "content", "text_only");
     (void)usb;

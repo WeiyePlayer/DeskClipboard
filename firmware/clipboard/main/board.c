@@ -11,6 +11,8 @@
 #include "esp_lcd_touch_ft5x06.h"
 #include "esp_log.h"
 #include "esp_lvgl_port.h"
+#include "esp_timer.h"
+#include <stdatomic.h>
 
 static const char *TAG = "board";
 
@@ -23,6 +25,71 @@ static i2c_master_dev_handle_t s_touch_dev;
 static lv_display_t *s_disp;
 
 lv_display_t *board_display(void) { return s_disp; }
+
+/* Display flush. One transfer in flight at a time (LVGL waits before the next
+ * flush). The SPI "color done" interrupt releases LVGL; a failed draw releases
+ * it at once and a lost interrupt after FLUSH_TIMEOUT_MS. Both force a full
+ * redraw so the screen repairs itself. */
+#define FLUSH_TIMEOUT_MS 500
+static esp_lcd_panel_handle_t s_panel;
+static TaskHandle_t s_flush_task;
+static volatile bool s_flushing;
+static _Atomic uint32_t s_flush_errors, s_flush_timeouts;
+static _Atomic bool s_redraw;
+
+uint32_t board_flush_errors(void) { return s_flush_errors; }
+uint32_t board_flush_timeouts(void) { return s_flush_timeouts; }
+
+static bool flush_done(esp_lcd_panel_io_handle_t io, esp_lcd_panel_io_event_data_t *edata, void *ctx)
+{
+    (void)io;
+    (void)edata;
+    BaseType_t woken = pdFALSE;
+    s_flushing = false;
+    lv_display_flush_ready((lv_display_t *)ctx);
+    if (s_flush_task) vTaskNotifyGiveFromISR(s_flush_task, &woken);
+    return woken == pdTRUE;
+}
+
+static void flush(lv_display_t *disp, const lv_area_t *area, uint8_t *map)
+{
+    s_flush_task = xTaskGetCurrentTaskHandle();
+    lv_draw_sw_rgb565_swap(map, lv_area_get_size(area));
+    s_flushing = true;
+    esp_err_t err = esp_lcd_panel_draw_bitmap(s_panel, area->x1, area->y1, area->x2 + 1, area->y2 + 1, map);
+    if (err != ESP_OK) {
+        s_flushing = false;
+        s_flush_errors++;
+        s_redraw = true;
+        lv_display_flush_ready(disp);
+    }
+}
+
+static void flush_wait(lv_display_t *disp)
+{
+    (void)disp;
+    int64_t deadline = esp_timer_get_time() + FLUSH_TIMEOUT_MS * 1000LL;
+    while (s_flushing) {
+        int64_t left = deadline - esp_timer_get_time();
+        if (left <= 0) {
+            s_flushing = false;
+            s_flush_timeouts++;
+            s_redraw = true;
+            break;
+        }
+        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(left / 1000 + 1));
+    }
+}
+
+static void redraw_check(lv_timer_t *t)
+{
+    (void)t;
+    if (s_redraw) {
+        s_redraw = false;
+        lv_obj_invalidate(lv_screen_active());
+        lv_obj_invalidate(lv_layer_top());
+    }
+}
 
 /* Polled FT6336 read with a bounded I2C timeout. esp_lcd's I2C panel IO (and
  * so esp_lvgl_port's touch indev) waits forever (-1) for a transfer; a wedged
@@ -109,10 +176,14 @@ esp_err_t board_display_start(void)
     lvgl_port_cfg_t lvgl_cfg = ESP_LVGL_PORT_INIT_CONFIG();
     lvgl_cfg.task_stack = 24576;
     ESP_ERROR_CHECK(lvgl_port_init(&lvgl_cfg));
-    const lvgl_port_display_cfg_t display = {
+    /* Draw buffers in internal DMA RAM: the SPI driver can send them directly.
+     * PSRAM buffers are not DMA-capable for SPI, so every flush needed a
+     * runtime bounce allocation of internal DMA RAM; when that failed the port
+     * ignored the error and LVGL waited forever for the flush (board froze). */
+    lvgl_port_display_cfg_t display = {
         .io_handle = io,
         .panel_handle = panel,
-        .buffer_size = LCD_H * 50,
+        .buffer_size = LCD_H * 20,
         .double_buffer = true,
         .hres = LCD_H,
         .vres = LCD_V,
@@ -124,15 +195,30 @@ esp_err_t board_display_start(void)
         },
         .flags = {
             .buff_dma = true,
-            .buff_spiram = true,
+            .buff_spiram = false,
             .swap_bytes = true,
         },
     };
     lv_display_t *disp = lvgl_port_add_disp(&display);
     if (disp == NULL) {
+        ESP_LOGW(TAG, "no internal DMA RAM for draw buffers, using PSRAM");
+        display.buffer_size = LCD_H * 50;
+        display.flags.buff_spiram = true;
+        disp = lvgl_port_add_disp(&display);
+    }
+    if (disp == NULL) {
         return ESP_FAIL;
     }
     s_disp = disp;
+    s_panel = panel;
+    /* Replace the port's flush path: check draw errors and never wait forever. */
+    const esp_lcd_panel_io_callbacks_t io_cbs = { .on_color_trans_done = flush_done };
+    ESP_ERROR_CHECK(esp_lcd_panel_io_register_event_callbacks(io, &io_cbs, disp));
+    lvgl_port_lock(0);
+    lv_display_set_flush_cb(disp, flush);
+    lv_display_set_flush_wait_cb(disp, flush_wait);
+    lv_timer_create(redraw_check, 200, NULL);
+    lvgl_port_unlock();
 
     const i2c_master_bus_config_t i2c_bus = {
         .clk_source = I2C_CLK_SRC_DEFAULT,

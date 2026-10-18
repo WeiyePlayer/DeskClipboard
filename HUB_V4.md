@@ -124,3 +124,9 @@ scripts/restore-board.sh backups/board-<时间> --app             # 校验 SHA-2
 - `board.c`：触摸改为自己的轮询读取，每次 I2C 最多等 50 ms；连续 5 次失败时复位 I2C 总线，界面继续运行。
 - `guard.c`：LVGL 每 500 ms 打一次心跳；高优先级监视任务发现 15 秒没有心跳就记录卡住的阶段（NVS `guard`）并重启开发板（历史与配对都在闪存中，不受影响）。
 - USB `status` 新增 `last_stall_stage`（0 无；1 其他；2 触摸；3 渲染；4 等待屏幕刷新）和 `last_stall_uptime_s`，用于确认以后是否还发生过。
+
+### 更新（2026-10-18 20:20）：真正的原因是屏幕刷新，不是触摸
+
+382b822 的卡死保护记录到 `last_stall_stage: 4`（等待屏幕刷新完成），`reset_reason: 3`（看门狗主动重启）。原因：LVGL 绘制缓冲在 PSRAM，SPI 不能直接 DMA，驱动每次刷新都要临时申请一块内部 DMA 内存（最多 24000 字节）做中转；内部内存紧张时申请失败，`esp_lcd_panel_draw_bitmap` 返回错误，但 esp_lvgl_port 忽略返回值，LVGL 于是永远等待刷新完成。点卡片会弹出全屏半透明层，需要大面积刷新，最容易触发。
+
+修复（board.c）：绘制缓冲改到内部 DMA 内存（20 行 × 2，开机一次性分配，失败才退回 PSRAM），SPI 不再需要临时申请；自己的刷新回调检查绘制错误并立即释放 LVGL；等待刷新最多 500 ms 且让出 CPU（不再空转）；出错后自动整屏重绘。USB `status` 新增 `free_internal`、`min_free_internal`、`largest_dma`、`flush_errors`、`flush_timeouts`。
